@@ -1,0 +1,37 @@
+appId: com.clipvault.app
+productName: ClipVault
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - dist-electron/**/*
+  - dist/renderer/**/*
+  - package.json
+extraResources:
+  - from: resources/icon.ico
+    to: icon.ico
+  - from: resources/tray-icon.png
+    to: tray-icon.png
+  - from: resources/tray-icon@2x.png
+    to: tray-icon@2x.png
+  - from: resources/tray-icon-paused.png
+    to: tray-icon-paused.png
+  - from: resources/tray-icon-paused@2x.png
+    to: tray-icon-paused@2x.png
+asar: true
+asarUnpack:
+  - node_modules/sharp/**/*
+  - node_modules/@img/**/*
+win:
+  target:
+    - nsis
+  icon: resources/icon.ico
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  installerHeaderIcon: resources/icon.ico

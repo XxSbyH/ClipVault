@@ -1,0 +1,84 @@
+html,
+body,
+#hud-root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: none;
+}
+
+body {
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'Microsoft YaHei',
+    'PingFang SC',
+    sans-serif;
+  color: #fff;
+}
+
+#hud-root {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 6px;
+  box-sizing: border-box;
+}
+
+#hud-container {
+  min-width: 360px;
+  max-width: 540px;
+  border-radius: 12px;
+  background: rgb(8 12 18 / 85%);
+  border: 1px solid rgb(255 255 255 / 12%);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 32%),
+    inset 0 1px 0 rgb(255 255 255 / 6%);
+  padding: 10px 16px;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition:
+    opacity 0.16s ease-out,
+    transform 0.16s ease-out;
+  text-align: center;
+}
+
+#hud-container.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#hud-direction {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: rgb(255 255 255 / 66%);
+  margin-bottom: 4px;
+  text-align: center;
+}
+
+#hud-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+#hud-icon {
+  opacity: 0.86;
+  font-size: 15px;
+}
+
+#hud-text {
+  max-width: 480px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: center;
+}
