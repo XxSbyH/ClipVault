@@ -30,8 +30,12 @@ window.electron.onHudShow((payload: HudPayload) => {
   iconEl.textContent = iconLabel[payload.type] ?? '📋';
   textEl.textContent = payload.text || '空内容';
 
-  container.classList.remove('show');
-  requestAnimationFrame(() => {
-    container.classList.add('show');
-  });
+  // 连续触发时保持 HUD 可见，只更新内容，避免“先消失再出现”的闪断感。
+  if (!container.classList.contains('show')) {
+    requestAnimationFrame(() => {
+      container.classList.add('show');
+    });
+    return;
+  }
+  container.classList.add('show');
 });

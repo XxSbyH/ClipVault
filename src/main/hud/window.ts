@@ -10,11 +10,17 @@ const HUD_MAX_WIDTH = 560;
 const HUD_HEIGHT = 76;
 const HUD_TOP_OFFSET = 20;
 const HUD_HIDE_DELAY = 2500;
+const HUD_CONTINUOUS_HIDE_DELAY = 6500;
+const HUD_CONTINUOUS_WINDOW = 4000;
 const HUD_CHANNEL = 'hud:show';
 
 let hudWindow: BrowserWindow | null = null;
 let hideTimer: NodeJS.Timeout | null = null;
 let pendingPayload: HudPayload | null = null;
+let hideToken = 0;
+let lastBounds: { x: number; y: number; width: number; height: number } | null = null;
+let lastShowAt = 0;
+let continuousStreak = 0;
 
 function getHudBounds(): { x: number; y: number; width: number; height: number } {
   const cursorPoint = screen.getCursorScreenPoint();
@@ -32,15 +38,46 @@ function getHudBounds(): { x: number; y: number; width: number; height: number }
 }
 
 function scheduleHide(): void {
+  const now = Date.now();
+  if (now - lastShowAt <= HUD_CONTINUOUS_WINDOW) {
+    continuousStreak += 1;
+  } else {
+    continuousStreak = 1;
+  }
+  lastShowAt = now;
+  const hideDelay = continuousStreak >= 2 ? HUD_CONTINUOUS_HIDE_DELAY : HUD_HIDE_DELAY;
+
   if (hideTimer) {
     clearTimeout(hideTimer);
   }
+  const token = ++hideToken;
   hideTimer = setTimeout(() => {
+    if (token !== hideToken) {
+      return;
+    }
     if (hudWindow && !hudWindow.isDestroyed()) {
       hudWindow.hide();
     }
     hideTimer = null;
-  }, HUD_HIDE_DELAY);
+    continuousStreak = 0;
+  }, hideDelay);
+}
+
+function setHudBoundsIfNeeded(bounds: { x: number; y: number; width: number; height: number }): void {
+  if (!hudWindow || hudWindow.isDestroyed()) {
+    return;
+  }
+  const same =
+    lastBounds &&
+    lastBounds.x === bounds.x &&
+    lastBounds.y === bounds.y &&
+    lastBounds.width === bounds.width &&
+    lastBounds.height === bounds.height;
+  if (same) {
+    return;
+  }
+  hudWindow.setBounds(bounds, false);
+  lastBounds = bounds;
 }
 
 function normalizeText(value: string): string {
@@ -81,9 +118,11 @@ function sendHudPayload(payload: HudPayload): void {
   }
 
   hudWindow.webContents.send(HUD_CHANNEL, payload);
-  hudWindow.showInactive();
   if (!hudWindow.isVisible()) {
-    hudWindow.show();
+    hudWindow.showInactive();
+    if (!hudWindow.isVisible()) {
+      hudWindow.show();
+    }
   }
   hudWindow.moveTop();
   scheduleHide();
@@ -147,9 +186,9 @@ function createHudWindow(): BrowserWindow {
 
 export function showQuickPasteHud(item: ClipboardItem, direction: HudDirection): void {
   try {
-    const window = createHudWindow();
+    createHudWindow();
     const bounds = getHudBounds();
-    window.setBounds(bounds, false);
+    setHudBoundsIfNeeded(bounds);
     const payload = toHudPayload(item, direction);
     sendHudPayload(payload);
     logger.info('hud', `显示 HUD: ${payload.direction} ${payload.type} ${payload.text.slice(0, 40)}`);
@@ -176,4 +215,6 @@ export function destroyHudWindow(): void {
   }
   hudWindow = null;
   pendingPayload = null;
+  lastBounds = null;
+  hideToken += 1;
 }

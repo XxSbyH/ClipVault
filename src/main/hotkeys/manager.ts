@@ -1,5 +1,5 @@
 import { dialog, globalShortcut, type BrowserWindow } from 'electron';
-import { DEFAULT_HOTKEYS, type HotkeySettings } from '@shared/types';
+import { DEFAULT_HOTKEYS, type ClipboardItem, type HotkeySettings } from '@shared/types';
 import { countItems, getHistoryByOffset } from '../database';
 import { showQuickPasteHud } from '../hud/window';
 import { logger } from '../logger/logger';
@@ -55,18 +55,20 @@ let quickPrevSpec: QuickSpec = { ctrl: true, alt: true, shift: false, keycode: 2
 let quickNextSpec: QuickSpec = { ctrl: true, alt: true, shift: false, keycode: 205 };
 let quickHeadId: number | null = null;
 let quickInFlight = false;
-const quickQueue: Array<'older' | 'newer'> = [];
+const quickQueue: number[] = [];
 
-async function performQuickPaste(direction: 'older' | 'newer', window: BrowserWindow): Promise<void> {
+function resolveQuickPasteItem(
+  direction: 'older' | 'newer'
+): { item: ClipboardItem; hudDirection: 'prev' | 'next' } | null {
   const total = countItems();
   if (total === 0) {
     logger.info('hotkeys', '快速粘贴跳过：历史为空');
-    return;
+    return null;
   }
 
   const head = getHistoryByOffset(0);
   if (!head) {
-    return;
+    return null;
   }
   if (quickHeadId !== null && head.id !== quickHeadId) {
     // 仅在历史头部发生变化时重置游标（即复制了新内容）。
@@ -83,28 +85,28 @@ async function performQuickPaste(direction: 'older' | 'newer', window: BrowserWi
 
   const item = getHistoryByOffset(quickPosition);
   if (!item) {
-    return;
+    return null;
   }
 
-  showQuickPasteHud(item, direction === 'older' ? 'prev' : 'next');
-  if (window.isVisible() && window.isFocused()) {
-    window.hide();
-  }
-  await pasteItem(item.id);
+  return { item, hudDirection: direction === 'older' ? 'prev' : 'next' };
 }
 
-async function processQuickQueue(window: BrowserWindow): Promise<void> {
+async function performQuickPaste(itemId: number): Promise<void> {
+  await pasteItem(itemId);
+}
+
+async function processQuickQueue(): Promise<void> {
   if (quickInFlight) {
     return;
   }
   quickInFlight = true;
   try {
     while (quickQueue.length > 0) {
-      const direction = quickQueue.shift();
-      if (!direction) {
+      const itemId = quickQueue.shift();
+      if (typeof itemId !== 'number') {
         continue;
       }
-      await performQuickPaste(direction, window);
+      await performQuickPaste(itemId);
     }
   } finally {
     quickInFlight = false;
@@ -112,8 +114,16 @@ async function processQuickQueue(window: BrowserWindow): Promise<void> {
 }
 
 function quickPaste(direction: 'older' | 'newer', window: BrowserWindow): void {
-  quickQueue.push(direction);
-  void processQuickQueue(window);
+  const payload = resolveQuickPasteItem(direction);
+  if (!payload) {
+    return;
+  }
+  showQuickPasteHud(payload.item, payload.hudDirection);
+  if (window.isVisible() && window.isFocused()) {
+    window.hide();
+  }
+  quickQueue.push(payload.item.id);
+  void processQuickQueue();
 }
 
 function safeRegister(accelerator: string, callback: () => void): boolean {
