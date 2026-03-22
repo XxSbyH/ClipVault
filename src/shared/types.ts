@@ -56,6 +56,9 @@ export interface AppSettings {
   textLimitKb: number;
   imageCompression: 'original' | 'high' | 'medium';
   launchOnStartup: boolean;
+  wheelShortcutEnabled: boolean;
+  wheelShortcutModifier: 'ctrl' | 'alt' | 'shift' | 'ctrl+alt';
+  wheelShortcutScope: 'global' | 'panel-only';
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -65,7 +68,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   enableBlacklist: true,
   textLimitKb: 100,
   imageCompression: 'high',
-  launchOnStartup: false
+  launchOnStartup: false,
+  wheelShortcutEnabled: true,
+  wheelShortcutModifier: 'ctrl',
+  wheelShortcutScope: 'global'
 };
 
 export interface HotkeySettings {

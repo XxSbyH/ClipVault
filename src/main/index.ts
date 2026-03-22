@@ -25,6 +25,7 @@ import {
 } from './database';
 import type { AppSettings, ClipboardItem } from '@shared/types';
 import {
+  applyWheelShortcutSettings,
   checkHotkeyAvailable,
   checkHotkeyConflicts,
   registerHotkeys,
@@ -229,6 +230,25 @@ function toggleMonitoringWithTraySync(): boolean {
   return enabled;
 }
 
+function buildHotkeyActions() {
+  return {
+    toggleWindow: toggleMainWindow,
+    focusSearch: () => {
+      if (!mainWindow) {
+        return;
+      }
+      if (!mainWindow.isVisible()) {
+        showAndFocusMainWindow();
+      } else {
+        mainWindow.focus();
+      }
+      mainWindow.webContents.send('clipboard:focus-search');
+    },
+    toggleMonitoring: toggleMonitoringWithTraySync,
+    clearHistory: clearHistoryAndRebuild
+  };
+}
+
 function emitClipboardItem(item: ClipboardItem): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
@@ -336,8 +356,15 @@ function registerIpcHandlers(): void {
   ipcMain.handle('update-setting', (_event, key: keyof AppSettings, value: AppSettings[keyof AppSettings]) =>
     {
       const next = writeSetting(key, value);
+      applyWheelShortcutSettings(next);
       if (key === 'launchOnStartup') {
         applyLaunchOnStartup(next.launchOnStartup);
+      }
+      if (
+        (key === 'wheelShortcutEnabled' || key === 'wheelShortcutModifier' || key === 'wheelShortcutScope') &&
+        mainWindow
+      ) {
+        registerHotkeys(mainWindow, buildHotkeyActions(), getHotkeySettings());
       }
       return next;
     });
@@ -354,19 +381,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('update-hotkeys', (_event, hotkeys: Record<string, string>) => {
     const next = updateHotkeySettings(hotkeys);
     if (mainWindow) {
-      registerHotkeys(
-        mainWindow,
-        {
-          toggleWindow: toggleMainWindow,
-          focusSearch: () => {
-            showAndFocusMainWindow();
-            mainWindow?.webContents.send('clipboard:focus-search');
-          },
-          toggleMonitoring: toggleMonitoringWithTraySync,
-          clearHistory: clearHistoryAndRebuild
-        },
-        next
-      );
+      registerHotkeys(mainWindow, buildHotkeyActions(), next);
     }
     return next;
   });
@@ -404,7 +419,9 @@ if (gotSingleInstanceLock) {
     initLogger('info');
     logger.info('startup', 'ClipVault 主进程启动完成');
     initDatabase();
-    applyLaunchOnStartup(readSettings().launchOnStartup);
+    const appSettings = readSettings();
+    applyLaunchOnStartup(appSettings.launchOnStartup);
+    applyWheelShortcutSettings(appSettings);
     runCleanupNow();
     startCleanupScheduler();
 
@@ -426,20 +443,7 @@ if (gotSingleInstanceLock) {
       }
     });
 
-    registerHotkeys(mainWindow, {
-      toggleWindow: toggleMainWindow,
-      focusSearch: () => {
-        if (!mainWindow) {
-          return;
-        }
-        if (!mainWindow.isVisible()) {
-          toggleMainWindow();
-        }
-        mainWindow.webContents.send('clipboard:focus-search');
-      },
-      toggleMonitoring: toggleMonitoringWithTraySync,
-      clearHistory: clearHistoryAndRebuild
-    }, hotkeys);
+    registerHotkeys(mainWindow, buildHotkeyActions(), hotkeys);
 
     createTray(mainWindow, buildTrayActions());
     setTimeout(() => {

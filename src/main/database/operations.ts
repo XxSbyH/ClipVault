@@ -435,12 +435,23 @@ export function getSettings(): AppSettings {
             case 'enableSensitiveFilter':
             case 'enableBlacklist':
             case 'launchOnStartup':
+            case 'wheelShortcutEnabled':
               if (typeof parsed === 'boolean') {
                 merged[row.key] = parsed;
               }
               break;
             case 'imageCompression':
               if (parsed === 'original' || parsed === 'high' || parsed === 'medium') {
+                merged[row.key] = parsed;
+              }
+              break;
+            case 'wheelShortcutModifier':
+              if (parsed === 'ctrl' || parsed === 'alt' || parsed === 'shift' || parsed === 'ctrl+alt') {
+                merged[row.key] = parsed;
+              }
+              break;
+            case 'wheelShortcutScope':
+              if (parsed === 'global' || parsed === 'panel-only') {
                 merged[row.key] = parsed;
               }
               break;

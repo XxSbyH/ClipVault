@@ -44,6 +44,16 @@ const NORMAL_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['openPanel', 'search', 
 const QUICK_PASTE_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['quickPastePrev', 'quickPasteNext'];
 const MODIFIER_KEYS = ['Ctrl', 'Alt', 'Shift', 'Meta'] as const;
 type ModifierKey = (typeof MODIFIER_KEYS)[number];
+const WHEEL_MODIFIER_OPTIONS: Array<{ value: AppSettings['wheelShortcutModifier']; label: string }> = [
+  { value: 'ctrl', label: 'Ctrl' },
+  { value: 'alt', label: 'Alt' },
+  { value: 'shift', label: 'Shift' },
+  { value: 'ctrl+alt', label: 'Ctrl+Alt' }
+];
+const WHEEL_SCOPE_OPTIONS: Array<{ value: AppSettings['wheelShortcutScope']; label: string }> = [
+  { value: 'global', label: '全局生效' },
+  { value: 'panel-only', label: '仅面板打开时' }
+];
 const DISPLAY_TOKEN_MAP: Record<string, string> = {
   CommandOrControl: 'Ctrl',
   Command: 'Cmd',
@@ -160,7 +170,10 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
         enableBlacklist: true,
         textLimitKb: 100,
         imageCompression: 'high',
-        launchOnStartup: false
+        launchOnStartup: false,
+        wheelShortcutEnabled: true,
+        wheelShortcutModifier: 'ctrl',
+        wheelShortcutScope: 'global'
       },
     [settings]
   );
@@ -545,6 +558,64 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
             <div className="space-y-1 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
               <p>点击右侧快捷键可重新录入，按下新组合后自动保存。</p>
               <p>按 `Esc` 可取消录入，若检测到冲突将不会保存。</p>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">鼠标滚轮快捷键</p>
+                  <p className="text-xs text-muted-foreground">按住修饰键并滚轮浏览历史：向上=更旧，向下=更新</p>
+                </div>
+                <Switch
+                  checked={safeSettings.wheelShortcutEnabled}
+                  onCheckedChange={(checked) => update('wheelShortcutEnabled', checked)}
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-xs text-muted-foreground">
+                  <span>修饰键</span>
+                  <select
+                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                    value={safeSettings.wheelShortcutModifier}
+                    onChange={(event) =>
+                      update('wheelShortcutModifier', event.target.value as AppSettings['wheelShortcutModifier'])
+                    }
+                    disabled={!safeSettings.wheelShortcutEnabled}
+                  >
+                    {WHEEL_MODIFIER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-1 text-xs text-muted-foreground">
+                  <span>生效范围</span>
+                  <select
+                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                    value={safeSettings.wheelShortcutScope}
+                    onChange={(event) =>
+                      update('wheelShortcutScope', event.target.value as AppSettings['wheelShortcutScope'])
+                    }
+                    disabled={!safeSettings.wheelShortcutEnabled}
+                  >
+                    {WHEEL_SCOPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {safeSettings.wheelShortcutEnabled ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-700">
+                  提示：在浏览器中，{WHEEL_MODIFIER_OPTIONS.find((item) => item.value === safeSettings.wheelShortcutModifier)?.label}
+                  +滚轮可能影响页面缩放，可改为其他修饰键或切到“仅面板打开时”。
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-2">

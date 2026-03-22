@@ -1,5 +1,11 @@
 import { dialog, globalShortcut, type BrowserWindow } from 'electron';
-import { DEFAULT_HOTKEYS, type ClipboardItem, type HotkeySettings } from '@shared/types';
+import {
+  DEFAULT_HOTKEYS,
+  DEFAULT_SETTINGS,
+  type AppSettings,
+  type ClipboardItem,
+  type HotkeySettings
+} from '@shared/types';
 import { countItems, getHistoryByOffset } from '../database';
 import { showQuickPasteHud } from '../hud/window';
 import { logger } from '../logger/logger';
@@ -12,8 +18,17 @@ interface HotkeyActions {
   clearHistory: () => void;
 }
 
-interface UiohookEvent {
+interface UiohookKeyboardEvent {
   keycode: number;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
+}
+
+interface UiohookWheelEvent {
+  rotation?: number;
+  clicks?: number;
+  direction?: number;
   ctrlKey?: boolean;
   altKey?: boolean;
   shiftKey?: boolean;
@@ -22,9 +37,18 @@ interface UiohookEvent {
 interface UiohookApi {
   start: () => void;
   stop: () => void;
-  on: (event: 'keydown', listener: (event: UiohookEvent) => void) => void;
-  off?: (event: 'keydown', listener: (event: UiohookEvent) => void) => void;
-  removeListener?: (event: 'keydown', listener: (event: UiohookEvent) => void) => void;
+  on: {
+    (event: 'keydown', listener: (event: UiohookKeyboardEvent) => void): void;
+    (event: 'wheel', listener: (event: UiohookWheelEvent) => void): void;
+  };
+  off?: {
+    (event: 'keydown', listener: (event: UiohookKeyboardEvent) => void): void;
+    (event: 'wheel', listener: (event: UiohookWheelEvent) => void): void;
+  };
+  removeListener?: {
+    (event: 'keydown', listener: (event: UiohookKeyboardEvent) => void): void;
+    (event: 'wheel', listener: (event: UiohookWheelEvent) => void): void;
+  };
 }
 
 interface QuickSpec {
@@ -38,6 +62,18 @@ const KEYCODE_MAP: Record<string, number> = {
   left: 203,
   right: 205
 };
+const WHEEL_DEBOUNCE_MS = 200;
+const WHEEL_MAX_STEPS_PER_BATCH = 10;
+
+type QuickPasteDirection = 'older' | 'newer';
+type WheelModifier = AppSettings['wheelShortcutModifier'];
+type WheelScope = AppSettings['wheelShortcutScope'];
+
+interface WheelShortcutOptions {
+  enabled: boolean;
+  modifier: WheelModifier;
+  scope: WheelScope;
+}
 
 const HOTKEY_LABELS: Record<keyof HotkeySettings, string> = {
   openPanel: '打开/隐藏面板',
@@ -50,12 +86,21 @@ const HOTKEY_LABELS: Record<keyof HotkeySettings, string> = {
 
 let quickPosition: number | null = null;
 let quickHook: UiohookApi | null = null;
-let quickListener: ((event: UiohookEvent) => void) | null = null;
+let quickKeyboardListener: ((event: UiohookKeyboardEvent) => void) | null = null;
+let quickWheelListener: ((event: UiohookWheelEvent) => void) | null = null;
 let quickPrevSpec: QuickSpec = { ctrl: true, alt: true, shift: false, keycode: 203 };
 let quickNextSpec: QuickSpec = { ctrl: true, alt: true, shift: false, keycode: 205 };
 let quickHeadId: number | null = null;
 let quickInFlight = false;
 const quickQueue: number[] = [];
+let wheelDebounceTimer: NodeJS.Timeout | null = null;
+let wheelDeltaAccumulator = 0;
+let wheelWindowRef: BrowserWindow | null = null;
+let wheelOptions: WheelShortcutOptions = {
+  enabled: DEFAULT_SETTINGS.wheelShortcutEnabled,
+  modifier: DEFAULT_SETTINGS.wheelShortcutModifier,
+  scope: DEFAULT_SETTINGS.wheelShortcutScope
+};
 
 function resolveQuickPasteItem(
   direction: 'older' | 'newer'
@@ -113,17 +158,102 @@ async function processQuickQueue(): Promise<void> {
   }
 }
 
-function quickPaste(direction: 'older' | 'newer', window: BrowserWindow): void {
+function quickPaste(direction: QuickPasteDirection, window: BrowserWindow, hideWindow = true): void {
   const payload = resolveQuickPasteItem(direction);
   if (!payload) {
     return;
   }
   showQuickPasteHud(payload.item, payload.hudDirection);
-  if (window.isVisible() && window.isFocused()) {
+  if (hideWindow && window.isVisible() && window.isFocused()) {
     window.hide();
   }
   quickQueue.push(payload.item.id);
   void processQuickQueue();
+}
+
+function clearWheelDebounceState(): void {
+  if (wheelDebounceTimer) {
+    clearTimeout(wheelDebounceTimer);
+    wheelDebounceTimer = null;
+  }
+  wheelDeltaAccumulator = 0;
+}
+
+function isWheelModifierMatched(event: UiohookWheelEvent): boolean {
+  const ctrl = Boolean(event.ctrlKey);
+  const alt = Boolean(event.altKey);
+  const shift = Boolean(event.shiftKey);
+
+  switch (wheelOptions.modifier) {
+    case 'ctrl':
+      return ctrl && !alt && !shift;
+    case 'alt':
+      return alt && !ctrl && !shift;
+    case 'shift':
+      return shift && !ctrl && !alt;
+    case 'ctrl+alt':
+      return ctrl && alt && !shift;
+    default:
+      return false;
+  }
+}
+
+function isWheelScopeMatched(window: BrowserWindow): boolean {
+  if (wheelOptions.scope === 'global') {
+    return true;
+  }
+  return window.isVisible() && window.isFocused();
+}
+
+function flushWheelAccumulated(window: BrowserWindow): void {
+  const delta = wheelDeltaAccumulator;
+  wheelDeltaAccumulator = 0;
+  wheelDebounceTimer = null;
+
+  if (delta === 0) {
+    return;
+  }
+
+  const direction: QuickPasteDirection = delta > 0 ? 'older' : 'newer';
+  const steps = Math.max(1, Math.min(WHEEL_MAX_STEPS_PER_BATCH, Math.round(Math.abs(delta))));
+  const hideWindow = wheelOptions.scope !== 'panel-only';
+  for (let index = 0; index < steps; index += 1) {
+    quickPaste(direction, window, hideWindow);
+  }
+}
+
+function handleWheelEvent(event: UiohookWheelEvent): void {
+  const window = wheelWindowRef;
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+  if (!wheelOptions.enabled) {
+    return;
+  }
+  if (!isWheelScopeMatched(window)) {
+    return;
+  }
+  if (!isWheelModifierMatched(event)) {
+    return;
+  }
+
+  const rotation = Number(event.rotation ?? 0);
+  if (!Number.isFinite(rotation) || rotation === 0) {
+    return;
+  }
+
+  const clicks = Math.max(1, Math.abs(Math.round(Number(event.clicks ?? 1))));
+  // Windows 下 uiohook 的滚轮符号与直觉常见相反：向下滚通常是正值。
+  // 统一修正后，normalizedRotation > 0 表示“向上滚”（上一项）。
+  const normalizedRotation = process.platform === 'win32' ? -rotation : rotation;
+  wheelDeltaAccumulator += normalizedRotation > 0 ? clicks : -clicks;
+
+  if (wheelDebounceTimer) {
+    clearTimeout(wheelDebounceTimer);
+  }
+  wheelDebounceTimer = setTimeout(() => {
+    flushWheelAccumulated(window);
+  }, WHEEL_DEBOUNCE_MS);
 }
 
 function safeRegister(accelerator: string, callback: () => void): boolean {
@@ -155,7 +285,7 @@ function parseQuickSpec(raw: string, fallbackKeycode: number): QuickSpec {
   };
 }
 
-function eventMatches(event: UiohookEvent, spec: QuickSpec): boolean {
+function eventMatches(event: UiohookKeyboardEvent, spec: QuickSpec): boolean {
   return (
     Boolean(event.ctrlKey) === spec.ctrl &&
     Boolean(event.altKey) === spec.alt &&
@@ -210,18 +340,28 @@ function toElectronAccelerator(raw: string, fallback: string): string {
 }
 
 function cleanupQuickPasteHook(): void {
-  if (quickHook && quickListener) {
-    quickHook.off?.('keydown', quickListener);
-    quickHook.removeListener?.('keydown', quickListener);
+  if (quickHook && quickKeyboardListener) {
+    quickHook.off?.('keydown', quickKeyboardListener);
+    quickHook.removeListener?.('keydown', quickKeyboardListener);
+  }
+  if (quickHook && quickWheelListener) {
+    quickHook.off?.('wheel', quickWheelListener);
+    quickHook.removeListener?.('wheel', quickWheelListener);
+  }
+  if (quickHook && (quickKeyboardListener || quickWheelListener)) {
     quickHook.stop();
   }
   quickHook = null;
-  quickListener = null;
+  quickKeyboardListener = null;
+  quickWheelListener = null;
+  wheelWindowRef = null;
+  clearWheelDebounceState();
 }
 
 async function registerQuickPasteHotkeys(window: BrowserWindow, hotkeys: HotkeySettings): Promise<void> {
   quickPrevSpec = parseQuickSpec(hotkeys.quickPastePrev, 203);
   quickNextSpec = parseQuickSpec(hotkeys.quickPasteNext, 205);
+  wheelWindowRef = window;
   const prev = toElectronAccelerator(hotkeys.quickPastePrev, 'CommandOrControl+Alt+Left');
   const next = toElectronAccelerator(hotkeys.quickPasteNext, 'CommandOrControl+Alt+Right');
 
@@ -232,7 +372,10 @@ async function registerQuickPasteHotkeys(window: BrowserWindow, hotkeys: HotkeyS
     void quickPaste('newer', window);
   });
 
-  if (prevRegistered && nextRegistered) {
+  const needKeyboardFallback = !prevRegistered || !nextRegistered;
+  const needWheelHook = wheelOptions.enabled;
+
+  if (!needKeyboardFallback && !needWheelHook) {
     logger.info('hotkeys', '快速粘贴使用 globalShortcut 通道');
     return;
   }
@@ -247,20 +390,51 @@ async function registerQuickPasteHotkeys(window: BrowserWindow, hotkeys: HotkeyS
       throw new Error('uiohook 实例不可用');
     }
 
-    quickListener = (event: UiohookEvent) => {
-      if (!prevRegistered && eventMatches(event, quickPrevSpec)) {
-        void quickPaste('older', window);
-      } else if (!nextRegistered && eventMatches(event, quickNextSpec)) {
-        void quickPaste('newer', window);
-      }
-    };
+    if (needKeyboardFallback) {
+      quickKeyboardListener = (event: UiohookKeyboardEvent) => {
+        if (!prevRegistered && eventMatches(event, quickPrevSpec)) {
+          void quickPaste('older', window);
+        } else if (!nextRegistered && eventMatches(event, quickNextSpec)) {
+          void quickPaste('newer', window);
+        }
+      };
+      hook.on('keydown', quickKeyboardListener);
+    }
 
-    hook.on('keydown', quickListener);
+    if (needWheelHook) {
+      quickWheelListener = (event: UiohookWheelEvent) => {
+        handleWheelEvent(event);
+      };
+      hook.on('wheel', quickWheelListener);
+    }
+
+    if (!quickKeyboardListener && !quickWheelListener) {
+      logger.info('hotkeys', '快速粘贴使用 globalShortcut 通道');
+      return;
+    }
+
     hook.start();
     quickHook = hook;
-    logger.info('hotkeys', '已启用 uiohook 作为快速粘贴补充通道');
+    if (needKeyboardFallback && needWheelHook) {
+      logger.info('hotkeys', '已启用 uiohook 作为快速粘贴键盘补充与滚轮监听通道');
+    } else if (needKeyboardFallback) {
+      logger.info('hotkeys', '已启用 uiohook 作为快速粘贴补充通道');
+    } else {
+      logger.info('hotkeys', '已启用 uiohook 滚轮快捷键监听');
+    }
   } catch (error) {
     logger.warn('hotkeys', `uiohook 不可用，仅使用 globalShortcut: ${String(error)}`);
+  }
+}
+
+export function applyWheelShortcutSettings(settings: Pick<AppSettings, 'wheelShortcutEnabled' | 'wheelShortcutModifier' | 'wheelShortcutScope'>): void {
+  wheelOptions = {
+    enabled: settings.wheelShortcutEnabled,
+    modifier: settings.wheelShortcutModifier,
+    scope: settings.wheelShortcutScope
+  };
+  if (!wheelOptions.enabled) {
+    clearWheelDebounceState();
   }
 }
 
