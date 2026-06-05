@@ -12,6 +12,7 @@ import type {
 
 type CommandResult = { success: boolean; error?: string };
 type ClearHistoryResult = { success: boolean; deleted: number; error?: string };
+type ClearHistoryCommandResult = { revision: number; deleted: number };
 type PasteResult = {
   success: boolean;
   message?: string;
@@ -153,10 +154,8 @@ export const clipboardApi: ClipboardApi = {
   },
   async clearHistory(): Promise<ClearHistoryResult> {
     try {
-      const before = await invoke<ClipboardItem[]>('get_history', { limit: 1000 });
-      await invoke<number>('clear_history', { includeFavorites: false });
-      const after = await invoke<ClipboardItem[]>('get_history', { limit: 1000 });
-      return { success: true, deleted: Math.max(0, before.length - after.length) };
+      const result = await invoke<ClearHistoryCommandResult>('clear_history', { includeFavorites: false });
+      return { success: true, deleted: result.deleted };
     } catch (error) {
       return { success: false, deleted: 0, error: errorMessage(error) };
     }

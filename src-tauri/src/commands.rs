@@ -103,6 +103,13 @@ pub struct PasteResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClearHistoryResult {
+    pub revision: u64,
+    pub deleted: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HotkeyConflict {
     pub hotkey: String,
     pub commands: Vec<String>,
@@ -238,9 +245,17 @@ pub fn update_hotkeys_impl(
     state.repository().update_hotkey_settings(&patch)
 }
 
-pub fn clear_history_impl(state: &AppState, include_favorites: bool) -> AppResult<u64> {
-    state.repository().clear_history(include_favorites)?;
-    Ok(state.bump_history_revision())
+pub fn clear_history_impl(
+    state: &AppState,
+    include_favorites: bool,
+) -> AppResult<ClearHistoryResult> {
+    let deleted = state.repository().clear_history(include_favorites)?;
+    let revision = if deleted > 0 {
+        state.bump_history_revision()
+    } else {
+        state.history_revision()
+    };
+    Ok(ClearHistoryResult { revision, deleted })
 }
 
 pub fn toggle_monitoring_impl(state: &AppState) -> MonitoringStatus {
@@ -438,10 +453,12 @@ pub fn clear_history(
     app: AppHandle,
     state: State<'_, AppState>,
     include_favorites: bool,
-) -> AppResult<u64> {
-    let revision = clear_history_impl(state.inner(), include_favorites)?;
-    emit_history_revision(&app, revision);
-    Ok(revision)
+) -> AppResult<ClearHistoryResult> {
+    let result = clear_history_impl(state.inner(), include_favorites)?;
+    if result.deleted > 0 {
+        emit_history_revision(&app, result.revision);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -622,7 +639,36 @@ mod tests {
         let after_clear = super::clear_history_impl(&state, true).unwrap();
 
         assert_eq!(after_delete, 1);
-        assert_eq!(after_clear, 2);
+        assert_eq!(after_clear.revision, 1);
+        assert_eq!(after_clear.deleted, 0);
+    }
+
+    #[test]
+    fn commands_clear_history_returns_real_deleted_count() {
+        let state = super::AppState::new(repo());
+        let normal = state
+            .repository()
+            .insert_clipboard_item(text_input("normal", "hash-normal"))
+            .unwrap();
+        let favorite = state
+            .repository()
+            .insert_clipboard_item(text_input("favorite", "hash-favorite"))
+            .unwrap();
+        state.repository().toggle_favorite(favorite.id).unwrap();
+
+        let result = super::clear_history_impl(&state, false).unwrap();
+        let remaining_ids: Vec<i64> = state
+            .repository()
+            .get_history(10)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+
+        assert_eq!(result.deleted, 1);
+        assert_eq!(result.revision, 1);
+        assert!(!remaining_ids.contains(&normal.id));
+        assert_eq!(remaining_ids, vec![favorite.id]);
     }
 
     #[test]

@@ -87,21 +87,16 @@ describe('clipboardApi Tauri adapter', () => {
     expect(invokeMock).toHaveBeenCalledWith('paste_item', { id: 3 });
   });
 
-  it('maps clear_history to a real deleted count using before and after history', async () => {
+  it('maps clear_history returned deleted count to old result shape', async () => {
     const { clipboardApi } = await import('./tauriApi');
-    invokeMock
-      .mockResolvedValueOnce([makeItem(1), makeItem(2), makeItem(3)])
-      .mockResolvedValueOnce(4)
-      .mockResolvedValueOnce([makeItem(3)]);
+    invokeMock.mockResolvedValueOnce({ revision: 4, deleted: 2 });
 
     await expect(clipboardApi.clearHistory()).resolves.toEqual({
       success: true,
       deleted: 2
     });
 
-    expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_history', { limit: 1000 });
-    expect(invokeMock).toHaveBeenNthCalledWith(2, 'clear_history', { includeFavorites: false });
-    expect(invokeMock).toHaveBeenNthCalledWith(3, 'get_history', { limit: 1000 });
+    expect(invokeMock).toHaveBeenCalledWith('clear_history', { includeFavorites: false });
   });
 
   it('returns the newest matching custom blacklist app when command returns a full list', async () => {

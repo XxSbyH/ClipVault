@@ -143,14 +143,14 @@ impl Repository {
         Ok(())
     }
 
-    pub fn clear_history(&self, include_favorites: bool) -> AppResult<()> {
+    pub fn clear_history(&self, include_favorites: bool) -> AppResult<usize> {
         let conn = self.conn()?;
-        if include_favorites {
-            conn.execute("DELETE FROM clipboard_items", [])?;
+        let deleted = if include_favorites {
+            conn.execute("DELETE FROM clipboard_items", [])?
         } else {
-            conn.execute("DELETE FROM clipboard_items WHERE is_favorite = 0", [])?;
-        }
-        Ok(())
+            conn.execute("DELETE FROM clipboard_items WHERE is_favorite = 0", [])?
+        };
+        Ok(deleted)
     }
 
     pub fn increment_use_stats(&self, id: i64) -> AppResult<ClipboardItem> {
@@ -777,9 +777,10 @@ mod tests {
         repo.toggle_favorite(favorite.id).unwrap();
 
         repo.delete_item(deleted.id).unwrap();
-        repo.clear_history(false).unwrap();
+        let deleted_count = repo.clear_history(false).unwrap();
 
         let history = repo.get_history(10).unwrap();
+        assert_eq!(deleted_count, 1);
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, favorite.id);
         assert!(!history.iter().any(|item| item.id == normal.id));
