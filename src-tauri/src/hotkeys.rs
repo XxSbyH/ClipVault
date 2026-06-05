@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -5,9 +7,14 @@ use crate::{
     commands::{self, AppState},
     errors::{AppError, AppResult},
     events,
-    models::{ClipboardItem, HudDirection, HudPayload, WheelShortcutModifier, WheelShortcutScope},
+    models::{
+        AppSettings, ClipboardItem, HotkeySettings, HudDirection, HudPayload,
+        WheelShortcutModifier, WheelShortcutScope,
+    },
     paste, windows,
 };
+
+const WHEEL_DEBOUNCE_MS: u128 = 180;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickPasteDirection {
@@ -70,21 +77,47 @@ pub fn head_id(items: &[ClipboardItem]) -> Option<i64> {
 pub fn register_global_shortcuts(app: &AppHandle) -> AppResult<()> {
     let settings = app.state::<AppState>().repository().get_hotkey_settings()?;
 
-    register_shortcut(app, &settings.open_panel, HotkeyAction::OpenPanel)?;
-    register_shortcut(app, &settings.search, HotkeyAction::Search)?;
-    register_shortcut(app, &settings.pause, HotkeyAction::Pause)?;
-    register_shortcut(app, &settings.clear, HotkeyAction::Clear)?;
-    register_shortcut(
-        app,
-        &settings.quick_paste_prev,
-        HotkeyAction::QuickPaste(QuickPasteDirection::Older),
-    )?;
-    register_shortcut(
-        app,
-        &settings.quick_paste_next,
-        HotkeyAction::QuickPaste(QuickPasteDirection::Newer),
-    )?;
-    start_wheel_hook(app)?;
+    replace_keyboard_shortcuts(app, &settings)?;
+    if let Err(error) = start_wheel_hook(app) {
+        tracing::warn!(
+            target: "hotkeys",
+            "wheel shortcut hook failed to start; keyboard quick paste remains available: {error}"
+        );
+    }
+    Ok(())
+}
+
+pub fn replace_keyboard_shortcuts(app: &AppHandle, settings: &HotkeySettings) -> AppResult<()> {
+    validate_hotkey_settings(settings)?;
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|err| AppError::from(format!("failed to unregister hotkeys: {err}")))?;
+    if let Err(error) = register_keyboard_shortcuts(app, settings) {
+        let _ = app.global_shortcut().unregister_all();
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub fn validate_hotkey_settings(settings: &HotkeySettings) -> AppResult<()> {
+    let mut by_hotkey: BTreeMap<String, &'static str> = BTreeMap::new();
+    for (command, accelerator, _) in keyboard_shortcut_entries(settings) {
+        let accelerator = accelerator.trim();
+        if accelerator.is_empty() {
+            return Err(AppError::from(format!("hotkey {command} cannot be empty")));
+        }
+        accelerator
+            .parse::<tauri_plugin_global_shortcut::Shortcut>()
+            .map_err(|error| {
+                AppError::from(format!("invalid hotkey {command}={accelerator}: {error}"))
+            })?;
+
+        if let Some(existing) = by_hotkey.insert(accelerator.to_string(), command) {
+            return Err(AppError::from(format!(
+                "hotkey {accelerator} is assigned to both {existing} and {command}"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -95,25 +128,27 @@ pub struct WheelHookOptions {
     pub scope: WheelShortcutScope,
 }
 
+impl WheelHookOptions {
+    pub fn from_settings(settings: &AppSettings) -> Self {
+        Self {
+            enabled: settings.wheel_shortcut_enabled,
+            modifier: settings.wheel_shortcut_modifier,
+            scope: settings.wheel_shortcut_scope,
+        }
+    }
+}
+
 pub fn start_wheel_hook(app: &AppHandle) -> AppResult<()> {
     let settings = app.state::<AppState>().repository().get_settings()?;
-    let options = WheelHookOptions {
-        enabled: settings.wheel_shortcut_enabled,
-        modifier: settings.wheel_shortcut_modifier,
-        scope: settings.wheel_shortcut_scope,
-    };
+    start_wheel_hook_with_options(app, WheelHookOptions::from_settings(&settings))
+}
 
-    if options.enabled {
-        tracing::warn!(
-            target: "hotkeys",
-            "wheel shortcut hook is not active in this build; keyboard quick paste remains available"
-        );
-    }
-    Ok(())
+pub fn start_wheel_hook_with_options(app: &AppHandle, options: WheelHookOptions) -> AppResult<()> {
+    wheel::start(app, options)
 }
 
 pub fn stop_wheel_hook() -> AppResult<()> {
-    Ok(())
+    wheel::stop()
 }
 
 pub fn check_system_hotkey_available(app: &AppHandle, hotkey: &str) -> HotkeyAvailabilityProbe {
@@ -172,6 +207,32 @@ enum HotkeyAction {
     Pause,
     Clear,
     QuickPaste(QuickPasteDirection),
+}
+
+fn keyboard_shortcut_entries(settings: &HotkeySettings) -> Vec<(&'static str, &str, HotkeyAction)> {
+    vec![
+        ("openPanel", &settings.open_panel, HotkeyAction::OpenPanel),
+        ("search", &settings.search, HotkeyAction::Search),
+        ("pause", &settings.pause, HotkeyAction::Pause),
+        ("clear", &settings.clear, HotkeyAction::Clear),
+        (
+            "quickPastePrev",
+            &settings.quick_paste_prev,
+            HotkeyAction::QuickPaste(QuickPasteDirection::Older),
+        ),
+        (
+            "quickPasteNext",
+            &settings.quick_paste_next,
+            HotkeyAction::QuickPaste(QuickPasteDirection::Newer),
+        ),
+    ]
+}
+
+fn register_keyboard_shortcuts(app: &AppHandle, settings: &HotkeySettings) -> AppResult<()> {
+    for (_, accelerator, action) in keyboard_shortcut_entries(settings) {
+        register_shortcut(app, accelerator, action)?;
+    }
+    Ok(())
 }
 
 fn register_shortcut(app: &AppHandle, accelerator: &str, action: HotkeyAction) -> AppResult<()> {
@@ -265,6 +326,262 @@ fn quick_paste(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()>
         );
     }
     Ok(())
+}
+
+fn wheel_direction_from_mouse_data(mouse_data: u32) -> Option<QuickPasteDirection> {
+    let delta = ((mouse_data >> 16) as u16) as i16;
+    match delta.cmp(&0) {
+        std::cmp::Ordering::Greater => Some(QuickPasteDirection::Older),
+        std::cmp::Ordering::Less => Some(QuickPasteDirection::Newer),
+        std::cmp::Ordering::Equal => None,
+    }
+}
+
+fn modifier_matches_state(
+    modifier: WheelShortcutModifier,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+) -> bool {
+    match modifier {
+        WheelShortcutModifier::Ctrl => ctrl,
+        WheelShortcutModifier::Alt => alt,
+        WheelShortcutModifier::Shift => shift,
+        WheelShortcutModifier::CtrlAlt => ctrl && alt,
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod wheel {
+    use std::{
+        sync::{mpsc, Mutex, OnceLock},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use ::windows::Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+        System::Threading::GetCurrentThreadId,
+        UI::{
+            Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT},
+            WindowsAndMessaging::{
+                CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
+                SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, MSG,
+                MSLLHOOKSTRUCT, PM_NOREMOVE, WH_MOUSE_LL, WM_MOUSEWHEEL, WM_QUIT,
+            },
+        },
+    };
+    use tauri::AppHandle;
+
+    use super::{
+        modifier_matches_state, quick_paste, wheel_direction_from_mouse_data, QuickPasteDirection,
+        WheelHookOptions, WHEEL_DEBOUNCE_MS,
+    };
+    use crate::{errors::AppResult, models::WheelShortcutScope, windows as app_windows};
+
+    static RUNTIME: OnceLock<Mutex<Option<WheelHookRuntime>>> = OnceLock::new();
+
+    struct WheelHookRuntime {
+        hook: isize,
+        thread_id: u32,
+        app: AppHandle,
+        options: WheelHookOptions,
+        last_triggered_at: Instant,
+    }
+
+    pub fn start(app: &AppHandle, options: WheelHookOptions) -> AppResult<()> {
+        stop()?;
+        if !options.enabled {
+            return Ok(());
+        }
+
+        let app = app.clone();
+        let (tx, rx) = mpsc::channel::<Result<(), String>>();
+        thread::Builder::new()
+            .name("clipvault-wheel-hook".to_string())
+            .spawn(move || {
+                let thread_id = unsafe { GetCurrentThreadId() };
+                let mut bootstrap_message = MSG::default();
+                let _ = unsafe {
+                    PeekMessageW(&mut bootstrap_message, HWND::default(), 0, 0, PM_NOREMOVE)
+                };
+
+                let hook = unsafe {
+                    SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), HINSTANCE::default(), 0)
+                };
+
+                let hook = match hook {
+                    Ok(hook) => hook,
+                    Err(error) => {
+                        let _ = tx.send(Err(format!("failed to install wheel hook: {error}")));
+                        return;
+                    }
+                };
+
+                {
+                    let mut runtime = runtime().lock().expect("wheel hook lock poisoned");
+                    *runtime = Some(WheelHookRuntime {
+                        hook: hook.0 as isize,
+                        thread_id,
+                        app,
+                        options,
+                        last_triggered_at: Instant::now()
+                            .checked_sub(Duration::from_millis(WHEEL_DEBOUNCE_MS as u64))
+                            .unwrap_or_else(Instant::now),
+                    });
+                }
+                let _ = tx.send(Ok(()));
+                message_loop();
+                clear_runtime_for_thread(thread_id, hook.0 as isize);
+            })
+            .map_err(|error| format!("failed to spawn wheel hook thread: {error}"))?;
+
+        rx.recv_timeout(Duration::from_secs(2))
+            .map_err(|error| format!("wheel hook startup timed out: {error}"))?
+            .map_err(Into::into)
+    }
+
+    pub fn stop() -> AppResult<()> {
+        let runtime = runtime().lock().expect("wheel hook lock poisoned").take();
+        let Some(runtime) = runtime else {
+            return Ok(());
+        };
+
+        let hook = HHOOK(runtime.hook as *mut _);
+        let _ = unsafe { UnhookWindowsHookEx(hook) };
+        let _ = unsafe { PostThreadMessageW(runtime.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
+        Ok(())
+    }
+
+    fn runtime() -> &'static Mutex<Option<WheelHookRuntime>> {
+        RUNTIME.get_or_init(|| Mutex::new(None))
+    }
+
+    fn clear_runtime_for_thread(thread_id: u32, hook: isize) {
+        let mut runtime = runtime().lock().expect("wheel hook lock poisoned");
+        if runtime
+            .as_ref()
+            .is_some_and(|current| current.thread_id == thread_id && current.hook == hook)
+        {
+            *runtime = None;
+        }
+    }
+
+    fn message_loop() {
+        let mut message = MSG::default();
+        loop {
+            let result = unsafe { GetMessageW(&mut message, HWND::default(), 0, 0) };
+            if result.0 <= 0 {
+                break;
+            }
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+
+    unsafe extern "system" fn mouse_hook_proc(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code == HC_ACTION as i32 && wparam.0 as u32 == WM_MOUSEWHEEL {
+            if handle_mouse_wheel(lparam) {
+                return LRESULT(1);
+            }
+        }
+        CallNextHookEx(HHOOK::default(), code, wparam, lparam)
+    }
+
+    fn handle_mouse_wheel(lparam: LPARAM) -> bool {
+        let Some(direction) = read_wheel_direction(lparam) else {
+            return false;
+        };
+
+        let (app, scope, modifier) = {
+            let runtime = runtime().lock().expect("wheel hook lock poisoned");
+            let Some(runtime) = runtime.as_ref() else {
+                return false;
+            };
+            (
+                runtime.app.clone(),
+                runtime.options.scope,
+                runtime.options.modifier,
+            )
+        };
+
+        if !modifier_matches_state(
+            modifier,
+            key_is_down(VK_CONTROL.0),
+            key_is_down(VK_MENU.0),
+            key_is_down(VK_SHIFT.0),
+        ) {
+            return false;
+        }
+
+        if scope == WheelShortcutScope::PanelOnly && !app_windows::is_main_window_visible(&app) {
+            return false;
+        }
+
+        let should_trigger = {
+            let mut runtime = runtime().lock().expect("wheel hook lock poisoned");
+            let Some(runtime) = runtime.as_mut() else {
+                return false;
+            };
+            if runtime.last_triggered_at.elapsed().as_millis() < WHEEL_DEBOUNCE_MS {
+                false
+            } else {
+                runtime.last_triggered_at = Instant::now();
+                true
+            }
+        };
+
+        if should_trigger {
+            thread::spawn(move || {
+                if let Err(error) = quick_paste(&app, direction) {
+                    tracing::warn!(target: "hotkeys", "wheel quick paste failed: {error}");
+                }
+            });
+        }
+
+        true
+    }
+
+    fn read_wheel_direction(lparam: LPARAM) -> Option<QuickPasteDirection> {
+        if lparam.0 == 0 {
+            return None;
+        }
+        let hook = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+        wheel_direction_from_mouse_data(hook.mouseData)
+    }
+
+    fn key_is_down(vkey: u16) -> bool {
+        unsafe { GetAsyncKeyState(i32::from(vkey)) & 0x8000u16 as i16 != 0 }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod wheel {
+    use tauri::AppHandle;
+
+    use super::WheelHookOptions;
+    use crate::{errors::AppResult, models::WheelShortcutScope};
+
+    pub fn start(_app: &AppHandle, options: WheelHookOptions) -> AppResult<()> {
+        if options.enabled {
+            tracing::warn!(
+                target: "hotkeys",
+                "wheel shortcuts are only supported on Windows; keyboard quick paste remains available"
+            );
+        }
+        let _ = WheelShortcutScope::Global;
+        Ok(())
+    }
+
+    pub fn stop() -> AppResult<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -367,6 +684,24 @@ mod tests {
     }
 
     #[test]
+    fn validates_hotkey_settings_before_registration() {
+        let mut settings = crate::models::HotkeySettings::default();
+        assert!(validate_hotkey_settings(&settings).is_ok());
+
+        settings.search = settings.open_panel.clone();
+        assert!(validate_hotkey_settings(&settings)
+            .unwrap_err()
+            .to_string()
+            .contains("assigned to both"));
+
+        settings.search = "not-a-hotkey".to_string();
+        assert!(validate_hotkey_settings(&settings)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid hotkey"));
+    }
+
+    #[test]
     fn wheel_hook_options_match_default_settings_shape() {
         let options = WheelHookOptions {
             enabled: true,
@@ -377,5 +712,46 @@ mod tests {
         assert!(options.enabled);
         assert_eq!(options.modifier, WheelShortcutModifier::Ctrl);
         assert_eq!(options.scope, WheelShortcutScope::Global);
+    }
+
+    #[test]
+    fn wheel_direction_maps_positive_delta_to_older_and_negative_to_newer() {
+        assert_eq!(
+            wheel_direction_from_mouse_data((120u16 as u32) << 16),
+            Some(QuickPasteDirection::Older)
+        );
+        assert_eq!(
+            wheel_direction_from_mouse_data(((-120i16) as u16 as u32) << 16),
+            Some(QuickPasteDirection::Newer)
+        );
+        assert_eq!(wheel_direction_from_mouse_data(0), None);
+    }
+
+    #[test]
+    fn wheel_modifier_matching_respects_configured_modifier() {
+        assert!(modifier_matches_state(
+            WheelShortcutModifier::Ctrl,
+            true,
+            false,
+            false
+        ));
+        assert!(modifier_matches_state(
+            WheelShortcutModifier::CtrlAlt,
+            true,
+            true,
+            false
+        ));
+        assert!(!modifier_matches_state(
+            WheelShortcutModifier::CtrlAlt,
+            true,
+            false,
+            false
+        ));
+        assert!(modifier_matches_state(
+            WheelShortcutModifier::Shift,
+            false,
+            false,
+            true
+        ));
     }
 }

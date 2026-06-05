@@ -11,7 +11,7 @@ use crate::{
     detector::{create_preview, detect_content_type, parse_single_file_path},
     errors::{AppError, AppResult},
     events,
-    models::{ClipboardInsertInput, ClipboardMetadata},
+    models::{ClipboardContentType, ClipboardInsertInput, ClipboardMetadata},
     privacy::{filter::is_sensitive_content, foreground::is_blacklisted_foreground_app},
 };
 
@@ -93,7 +93,7 @@ pub fn build_text_insert_input(
     }
 
     let content_type = detect_content_type(text);
-    let hash = hash_bytes(format!("{content_type:?}:{text}").as_bytes());
+    let hash = hash_text(content_type, text);
     if hash == last_hash {
         return CaptureDecision::Skip(CaptureSkipReason::Duplicate);
     }
@@ -241,16 +241,24 @@ fn image_filename(timestamp_ms: i64) -> String {
     format!("screenshot_{timestamp_ms}.jpg")
 }
 
-fn hash_bytes(bytes: &[u8]) -> String {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
+fn hash_text(content_type: ClipboardContentType, text: &str) -> String {
+    hash_bytes(format!("{}:{text}", content_type_hash_prefix(content_type)).as_bytes())
+}
 
-    let mut hash = FNV_OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
+fn content_type_hash_prefix(content_type: ClipboardContentType) -> &'static str {
+    match content_type {
+        ClipboardContentType::Text => "text",
+        ClipboardContentType::Image => "image",
+        ClipboardContentType::File => "file",
+        ClipboardContentType::Url => "url",
+        ClipboardContentType::Code => "code",
+        ClipboardContentType::Color => "color",
+        ClipboardContentType::Email => "email",
     }
-    format!("{hash:016x}")
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", md5::compute(bytes))
 }
 
 fn now_millis() -> i64 {
@@ -301,5 +309,19 @@ mod tests {
         assert_eq!(input.content.as_deref(), Some("https://example.com"));
         assert_eq!(input.preview, "https://example.com");
         assert_eq!(input.content_hash, hash);
+        assert_eq!(hash, "7142bd89ab7f64ee15a5c70be84827a8");
+    }
+
+    #[test]
+    fn hash_bytes_matches_legacy_electron_md5_buffer_hash() {
+        assert_eq!(hash_bytes(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+    }
+
+    #[test]
+    fn text_hash_uses_lowercase_database_type_prefix() {
+        assert_eq!(
+            hash_text(ClipboardContentType::Text, "hello"),
+            "98381d9d9f80490f7c3dd0b69cb8a14e"
+        );
     }
 }

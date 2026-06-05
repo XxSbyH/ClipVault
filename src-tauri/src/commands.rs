@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_autostart::ManagerExt as _;
-use tauri_plugin_global_shortcut::GlobalShortcutExt as _;
 
 use crate::{
     database::repository::Repository,
@@ -20,7 +19,8 @@ use crate::{
     hotkeys::{self, QuickPasteCursor, QuickPasteCursorSnapshot},
     models::{
         AppSettings, BlacklistApp, ClipboardContentType, ClipboardItem, HotkeySettings,
-        HotkeySettingsPatch, HudDirection, HudPayload, MonitoringStatus,
+        HotkeySettingsPatch, HudDirection, HudPayload, MonitoringStatus, WheelShortcutModifier,
+        WheelShortcutScope,
     },
     paste, settings, windows,
 };
@@ -302,7 +302,11 @@ pub fn update_hotkeys_impl(
     state: &AppState,
     patch: HotkeySettingsPatch,
 ) -> AppResult<HotkeySettings> {
-    state.repository().update_hotkey_settings(&patch)
+    let current = state.repository().get_hotkey_settings()?;
+    let candidate = build_hotkey_settings_candidate(&current, &patch)?;
+    state
+        .repository()
+        .update_hotkey_settings(&HotkeySettingsPatch::from(&candidate))
 }
 
 pub fn clear_history_impl(
@@ -392,6 +396,33 @@ pub fn check_hotkey_available_with_system_impl(
     }
 }
 
+pub fn build_hotkey_settings_candidate(
+    current: &HotkeySettings,
+    patch: &HotkeySettingsPatch,
+) -> AppResult<HotkeySettings> {
+    let mut candidate = current.clone();
+    if let Some(value) = patch.open_panel.as_deref() {
+        candidate.open_panel = normalize_hotkey_patch_value("openPanel", value)?;
+    }
+    if let Some(value) = patch.search.as_deref() {
+        candidate.search = normalize_hotkey_patch_value("search", value)?;
+    }
+    if let Some(value) = patch.pause.as_deref() {
+        candidate.pause = normalize_hotkey_patch_value("pause", value)?;
+    }
+    if let Some(value) = patch.clear.as_deref() {
+        candidate.clear = normalize_hotkey_patch_value("clear", value)?;
+    }
+    if let Some(value) = patch.quick_paste_prev.as_deref() {
+        candidate.quick_paste_prev = normalize_hotkey_patch_value("quickPastePrev", value)?;
+    }
+    if let Some(value) = patch.quick_paste_next.as_deref() {
+        candidate.quick_paste_next = normalize_hotkey_patch_value("quickPasteNext", value)?;
+    }
+    hotkeys::validate_hotkey_settings(&candidate)?;
+    Ok(candidate)
+}
+
 pub fn test_hud_impl() -> HudPayload {
     HudPayload {
         direction: HudDirection::Next,
@@ -475,6 +506,10 @@ pub fn update_setting(
     key: String,
     value: Value,
 ) -> AppResult<AppSettings> {
+    if is_wheel_shortcut_setting_key(&key) {
+        return update_wheel_shortcut_setting(&app, state.inner(), key, value);
+    }
+
     let before_revision = state.history_revision();
     let should_apply_autostart = key == "launchOnStartup";
     let settings = update_setting_impl(state.inner(), key, value)?;
@@ -528,12 +563,33 @@ pub fn update_hotkeys(
     state: State<'_, AppState>,
     patch: HotkeySettingsPatch,
 ) -> AppResult<HotkeySettings> {
-    let hotkeys = update_hotkeys_impl(state.inner(), patch)?;
-    app.global_shortcut()
-        .unregister_all()
-        .map_err(|err| AppError::from(format!("failed to unregister hotkeys: {err}")))?;
-    hotkeys::register_global_shortcuts(&app)?;
-    Ok(hotkeys)
+    let current = state.repository().get_hotkey_settings()?;
+    let candidate = build_hotkey_settings_candidate(&current, &patch)?;
+
+    if let Err(error) = hotkeys::replace_keyboard_shortcuts(&app, &candidate) {
+        if let Err(rollback_error) = hotkeys::replace_keyboard_shortcuts(&app, &current) {
+            return Err(AppError::from(format!(
+                "{error}; failed to restore previous hotkeys: {rollback_error}"
+            )));
+        }
+        return Err(error);
+    }
+
+    match state
+        .repository()
+        .update_hotkey_settings(&HotkeySettingsPatch::from(&candidate))
+    {
+        Ok(hotkeys) => Ok(hotkeys),
+        Err(error) => {
+            if let Err(rollback_error) = hotkeys::replace_keyboard_shortcuts(&app, &current) {
+                tracing::error!(
+                    target: "hotkeys",
+                    "failed to restore previous hotkeys after persistence error: {rollback_error}"
+                );
+            }
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command]
@@ -603,6 +659,69 @@ fn apply_setting_side_effect(app: &AppHandle, settings: &AppSettings) -> AppResu
     Ok(())
 }
 
+fn update_wheel_shortcut_setting(
+    app: &AppHandle,
+    state: &AppState,
+    key: String,
+    value: Value,
+) -> AppResult<AppSettings> {
+    let current = state.repository().get_settings()?;
+    let candidate = build_wheel_shortcut_settings_candidate(&current, &key, value.clone())?;
+
+    if let Err(error) = hotkeys::start_wheel_hook_with_options(
+        app,
+        hotkeys::WheelHookOptions::from_settings(&candidate),
+    ) {
+        restore_wheel_hook(app, &current);
+        return Err(error);
+    }
+
+    match update_setting_impl(state, key, value) {
+        Ok(settings) => Ok(settings),
+        Err(error) => {
+            restore_wheel_hook(app, &current);
+            Err(error)
+        }
+    }
+}
+
+pub fn build_wheel_shortcut_settings_candidate(
+    current: &AppSettings,
+    key: &str,
+    value: Value,
+) -> AppResult<AppSettings> {
+    let mut candidate = current.clone();
+    match key {
+        "wheelShortcutEnabled" => {
+            candidate.wheel_shortcut_enabled =
+                serde_json::from_value::<bool>(value).map_err(|error| {
+                    AppError::from(format!("invalid wheelShortcutEnabled: {error}"))
+                })?;
+        }
+        "wheelShortcutModifier" => {
+            candidate.wheel_shortcut_modifier =
+                serde_json::from_value::<WheelShortcutModifier>(value).map_err(|error| {
+                    AppError::from(format!("invalid wheelShortcutModifier: {error}"))
+                })?;
+        }
+        "wheelShortcutScope" => {
+            candidate.wheel_shortcut_scope = serde_json::from_value::<WheelShortcutScope>(value)
+                .map_err(|error| AppError::from(format!("invalid wheelShortcutScope: {error}")))?;
+        }
+        _ => return Err(AppError::from(format!("unsupported wheel setting: {key}"))),
+    }
+    Ok(candidate)
+}
+
+fn restore_wheel_hook(app: &AppHandle, settings: &AppSettings) {
+    if let Err(error) = hotkeys::start_wheel_hook_with_options(
+        app,
+        hotkeys::WheelHookOptions::from_settings(settings),
+    ) {
+        tracing::error!(target: "hotkeys", "failed to restore previous wheel hook: {error}");
+    }
+}
+
 fn monitoring_status(monitoring: &MonitoringRuntimeState) -> MonitoringStatus {
     MonitoringStatus {
         monitor_enabled: monitoring.monitor_enabled,
@@ -615,6 +734,21 @@ fn monitoring_status(monitoring: &MonitoringRuntimeState) -> MonitoringStatus {
 
 fn normalize_limit(limit: i64) -> i64 {
     limit.clamp(1, DEFAULT_HISTORY_LIMIT)
+}
+
+fn normalize_hotkey_patch_value(key: &str, value: &str) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::from(format!("invalid hotkey_{key}: empty value")));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn is_wheel_shortcut_setting_key(key: &str) -> bool {
+    matches!(
+        key,
+        "wheelShortcutEnabled" | "wheelShortcutModifier" | "wheelShortcutScope"
+    )
 }
 
 fn detect_image_mime_type(item: &ClipboardItem, image_data: &[u8]) -> &'static str {
@@ -865,6 +999,104 @@ mod tests {
         assert!(report.has_conflicts);
         assert_eq!(report.conflicts.len(), 1);
         assert_eq!(report.conflicts[0].hotkey, "Ctrl+Shift+V");
+    }
+
+    #[test]
+    fn commands_hotkey_candidate_trims_and_validates_before_persistence() {
+        let current = crate::models::HotkeySettings::default();
+
+        let candidate = super::build_hotkey_settings_candidate(
+            &current,
+            &HotkeySettingsPatch {
+                open_panel: Some(" Ctrl+Alt+K ".to_string()),
+                ..HotkeySettingsPatch::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(candidate.open_panel, "Ctrl+Alt+K");
+
+        let duplicate = super::build_hotkey_settings_candidate(
+            &current,
+            &HotkeySettingsPatch {
+                search: Some(current.open_panel.clone()),
+                ..HotkeySettingsPatch::default()
+            },
+        )
+        .unwrap_err();
+        assert!(duplicate.to_string().contains("assigned to both"));
+
+        let invalid = super::build_hotkey_settings_candidate(
+            &current,
+            &HotkeySettingsPatch {
+                open_panel: Some("not-a-hotkey".to_string()),
+                ..HotkeySettingsPatch::default()
+            },
+        )
+        .unwrap_err();
+        assert!(invalid.to_string().contains("invalid hotkey"));
+    }
+
+    #[test]
+    fn commands_hotkey_update_rejects_invalid_values_without_database_write() {
+        let state = super::AppState::new(repo());
+
+        let result = super::update_hotkeys_impl(
+            &state,
+            HotkeySettingsPatch {
+                open_panel: Some("Ctrl+Alt+K".to_string()),
+                pause: Some("not-a-hotkey".to_string()),
+                ..HotkeySettingsPatch::default()
+            },
+        );
+
+        assert!(result.unwrap_err().to_string().contains("invalid hotkey"));
+        assert_eq!(
+            state.repository().get_hotkey_settings().unwrap().open_panel,
+            "CommandOrControl+Shift+V"
+        );
+    }
+
+    #[test]
+    fn commands_identify_wheel_shortcut_setting_keys() {
+        assert!(super::is_wheel_shortcut_setting_key("wheelShortcutEnabled"));
+        assert!(super::is_wheel_shortcut_setting_key(
+            "wheelShortcutModifier"
+        ));
+        assert!(super::is_wheel_shortcut_setting_key("wheelShortcutScope"));
+        assert!(!super::is_wheel_shortcut_setting_key("launchOnStartup"));
+    }
+
+    #[test]
+    fn commands_build_wheel_shortcut_candidate_validates_values_before_persistence() {
+        let current = crate::models::AppSettings::default();
+
+        let disabled = super::build_wheel_shortcut_settings_candidate(
+            &current,
+            "wheelShortcutEnabled",
+            serde_json::json!(false),
+        )
+        .unwrap();
+        assert!(!disabled.wheel_shortcut_enabled);
+
+        let scoped = super::build_wheel_shortcut_settings_candidate(
+            &current,
+            "wheelShortcutScope",
+            serde_json::json!("panel-only"),
+        )
+        .unwrap();
+        assert_eq!(
+            scoped.wheel_shortcut_scope,
+            crate::models::WheelShortcutScope::PanelOnly
+        );
+
+        let invalid = super::build_wheel_shortcut_settings_candidate(
+            &current,
+            "wheelShortcutModifier",
+            serde_json::json!("ctrl+shift"),
+        )
+        .unwrap_err();
+        assert!(invalid.to_string().contains("wheelShortcutModifier"));
     }
 
     #[test]

@@ -30,6 +30,12 @@ pub fn hide_main_window(app: &AppHandle) -> AppResult<()> {
         .map_err(|err| AppError::from(format!("failed to hide main window: {err}")))
 }
 
+pub fn is_main_window_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
+}
+
 pub fn show_hud_window(app: &AppHandle) -> AppResult<()> {
     let Some(window) = app.get_webview_window("hud") else {
         return Err(AppError::from("hud window not found"));
