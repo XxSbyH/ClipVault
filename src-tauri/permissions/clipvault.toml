@@ -1,0 +1,29 @@
+[[permission]]
+identifier = "allow-task4-commands"
+description = "Allows ClipVault Task 4 application commands exposed to the renderer."
+commands.allow = [
+  "health_check",
+  "get_history",
+  "get_history_revision",
+  "search_items",
+  "paste_item",
+  "delete_item",
+  "toggle_pin",
+  "toggle_favorite",
+  "get_image_data_url",
+  "get_settings",
+  "update_setting",
+  "list_blacklist",
+  "add_blacklist",
+  "remove_blacklist",
+  "get_hotkeys",
+  "check_hotkey_conflicts",
+  "check_hotkey_available",
+  "update_hotkeys",
+  "clear_history",
+  "toggle_monitoring",
+  "minimize_window",
+  "hide_window",
+  "test_monitoring",
+  "test_hud",
+]

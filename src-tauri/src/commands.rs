@@ -9,7 +9,7 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, Window};
 
 use crate::{
     database::repository::Repository,
@@ -156,25 +156,19 @@ pub fn paste_item_impl(state: &AppState, id: i64) -> AppResult<PasteResult> {
         });
     };
 
-    let item = state.repository().increment_use_stats(id)?;
-    {
-        let mut cursor = state
-            .quick_paste_cursor
-            .lock()
-            .expect("quick paste cursor lock poisoned");
-        cursor.offset = None;
-        cursor.last_item_id = Some(id);
-    }
-    let revision = state.bump_history_revision();
     Ok(PasteResult {
-        success: true,
-        item: Some(item),
-        revision,
-        message: "paste stub completed".to_string(),
+        success: false,
+        item: None,
+        revision: state.history_revision(),
+        message: "paste is not implemented in Task 4".to_string(),
     })
 }
 
 pub fn delete_item_impl(state: &AppState, id: i64) -> AppResult<u64> {
+    if state.repository().get_item_by_id(id)?.is_none() {
+        return Err(AppError::from(format!("clipboard item {id} not found")));
+    }
+
     state.repository().delete_item(id)?;
     Ok(state.bump_history_revision())
 }
@@ -195,19 +189,24 @@ pub fn get_image_data_url_impl(state: &AppState, id: i64) -> AppResult<Option<St
     let Some(item) = state.repository().get_item_by_id(id)? else {
         return Ok(None);
     };
-    let Some(image_data) = item.image_data else {
+    let Some(image_data) = item.image_data.as_deref() else {
         return Ok(None);
     };
+    let mime_type = detect_image_mime_type(&item, image_data);
 
     Ok(Some(format!(
-        "data:image/png;base64,{}",
+        "{mime_type};base64,{}",
         STANDARD.encode(image_data)
     )))
 }
 
 pub fn update_setting_impl(state: &AppState, key: String, value: Value) -> AppResult<AppSettings> {
+    let before_count = state.repository().count_items()?;
     let settings = settings::update_setting_with_side_effects(state.repository(), &key, value)?;
-    state.bump_history_revision();
+    let after_count = state.repository().count_items()?;
+    if before_count != after_count {
+        state.bump_history_revision();
+    }
     Ok(settings)
 }
 
@@ -336,11 +335,8 @@ pub fn search_items(
 }
 
 #[tauri::command]
-pub fn paste_item(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<PasteResult> {
+pub fn paste_item(_app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<PasteResult> {
     let result = paste_item_impl(state.inner(), id)?;
-    if result.success {
-        emit_history_revision(&app, result.revision);
-    }
     Ok(result)
 }
 
@@ -386,8 +382,12 @@ pub fn update_setting(
     key: String,
     value: Value,
 ) -> AppResult<AppSettings> {
+    let before_revision = state.history_revision();
     let settings = update_setting_impl(state.inner(), key, value)?;
-    emit_history_revision(&app, state.history_revision());
+    let after_revision = state.history_revision();
+    if after_revision != before_revision {
+        emit_history_revision(&app, after_revision);
+    }
     Ok(settings)
 }
 
@@ -452,13 +452,17 @@ pub fn toggle_monitoring(app: AppHandle, state: State<'_, AppState>) -> Monitori
 }
 
 #[tauri::command]
-pub fn minimize_window() -> bool {
-    true
+pub fn minimize_window(window: Window) -> AppResult<()> {
+    window
+        .minimize()
+        .map_err(|err| AppError::from(format!("failed to minimize window: {err}")))
 }
 
 #[tauri::command]
-pub fn hide_window() -> bool {
-    true
+pub fn hide_window(window: Window) -> AppResult<()> {
+    window
+        .hide()
+        .map_err(|err| AppError::from(format!("failed to hide window: {err}")))
 }
 
 #[tauri::command]
@@ -494,6 +498,40 @@ fn normalize_limit(limit: i64) -> i64 {
     limit.clamp(1, DEFAULT_HISTORY_LIMIT)
 }
 
+fn detect_image_mime_type(item: &ClipboardItem, image_data: &[u8]) -> &'static str {
+    if let Some(value) = metadata_mime_type(item) {
+        return value;
+    }
+
+    match image_data {
+        [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, ..] => "data:image/png",
+        [0xFF, 0xD8, 0xFF, ..] => "data:image/jpeg",
+        [b'G', b'I', b'F', b'8', b'7' | b'9', b'a', ..] => "data:image/gif",
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "data:image/webp",
+        _ => "data:application/octet-stream",
+    }
+}
+
+fn metadata_mime_type(item: &ClipboardItem) -> Option<&'static str> {
+    for key in ["mimeType", "mime_type", "contentType", "content_type"] {
+        let Some(value) = item.metadata.extra.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+
+        match value.trim().to_ascii_lowercase().as_str() {
+            "image/png" | "data:image/png" => return Some("data:image/png"),
+            "image/jpeg" | "image/jpg" | "data:image/jpeg" | "data:image/jpg" => {
+                return Some("data:image/jpeg");
+            }
+            "image/gif" | "data:image/gif" => return Some("data:image/gif"),
+            "image/webp" | "data:image/webp" => return Some("data:image/webp"),
+            _ => {}
+        }
+    }
+
+    None
+}
+
 fn hotkey_patch_entries(patch: &HotkeySettingsPatch) -> Vec<(&'static str, &str)> {
     let mut entries = Vec::new();
     if let Some(value) = patch.open_panel.as_deref() {
@@ -523,7 +561,9 @@ mod tests {
 
     use crate::{
         database::repository::Repository,
-        models::{ClipboardContentType, ClipboardInsertInput, HotkeySettingsPatch},
+        models::{
+            ClipboardContentType, ClipboardInsertInput, ClipboardMetadata, HotkeySettingsPatch,
+        },
     };
 
     fn repo() -> Repository {
@@ -540,6 +580,18 @@ mod tests {
             metadata: None,
             file_path: None,
             image_data: None,
+        }
+    }
+
+    fn image_input(hash: &str, image_data: Vec<u8>) -> ClipboardInsertInput {
+        ClipboardInsertInput {
+            content: None,
+            content_type: ClipboardContentType::Image,
+            content_hash: hash.to_string(),
+            preview: "[image]".to_string(),
+            metadata: Some(ClipboardMetadata::default()),
+            file_path: None,
+            image_data: Some(image_data),
         }
     }
 
@@ -571,6 +623,64 @@ mod tests {
 
         assert_eq!(after_delete, 1);
         assert_eq!(after_clear, 2);
+    }
+
+    #[test]
+    fn commands_delete_missing_item_returns_error_without_bumping_revision() {
+        let state = super::AppState::new(repo());
+
+        let result = super::delete_item_impl(&state, 404);
+
+        assert!(result.unwrap_err().to_string().contains("not found"));
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_paste_item_is_explicit_unsupported_stub() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha", "hash-alpha"))
+            .unwrap();
+
+        let result = super::paste_item_impl(&state, item.id).unwrap();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(!result.success);
+        assert!(result.message.contains("not implemented"));
+        assert_eq!(result.revision, 0);
+        assert_eq!(stored.use_count, 0);
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_image_data_url_detects_jpeg_magic_bytes() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(image_input(
+                "hash-jpeg",
+                vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10],
+            ))
+            .unwrap();
+
+        let data_url = super::get_image_data_url_impl(&state, item.id)
+            .unwrap()
+            .unwrap();
+
+        assert!(data_url.starts_with("data:image/jpeg;base64,"));
+    }
+
+    #[test]
+    fn commands_setting_update_does_not_bump_revision_when_history_is_unchanged() {
+        let state = super::AppState::new(repo());
+
+        let settings =
+            super::update_setting_impl(&state, "textLimitKb".to_string(), serde_json::json!(64))
+                .unwrap();
+
+        assert_eq!(settings.text_limit_kb, 64);
+        assert_eq!(state.history_revision(), 0);
     }
 
     #[test]
