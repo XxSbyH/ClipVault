@@ -14,26 +14,36 @@ pub fn init_database(path: impl AsRef<Path>) -> AppResult<()> {
 }
 
 fn rebuild_fts(conn: &Connection) -> AppResult<()> {
-    let triggers = {
-        let mut stmt = conn.prepare(
-            "SELECT name FROM sqlite_master
-             WHERE type = 'trigger' AND name LIKE 'clipboard_items_%'",
-        )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
+    let triggers = collect_schema_names(
+        conn,
+        "SELECT name FROM sqlite_master
+         WHERE type = 'trigger' AND name LIKE 'clipboard_items_%'",
+    )?;
 
     conn.execute_batch("BEGIN IMMEDIATE")?;
     let result = (|| -> AppResult<()> {
         for trigger in triggers {
-            let escaped = trigger.replace('"', "\"\"");
-            conn.execute_batch(&format!("DROP TRIGGER IF EXISTS \"{escaped}\";"))?;
+            conn.execute_batch(&format!(
+                "DROP TRIGGER IF EXISTS {};",
+                quote_identifier(&trigger)
+            ))?;
+        }
+
+        conn.execute_batch("DROP TABLE IF EXISTS clipboard_fts;")?;
+        let stale_fts_tables = collect_schema_names(
+            conn,
+            "SELECT name FROM sqlite_master
+             WHERE type = 'table' AND name LIKE 'clipboard_fts_%'",
+        )?;
+        for table in stale_fts_tables {
+            conn.execute_batch(&format!(
+                "DROP TABLE IF EXISTS {};",
+                quote_identifier(&table)
+            ))?;
         }
 
         conn.execute_batch(
             r#"
-DROP TABLE IF EXISTS clipboard_fts;
-
 CREATE VIRTUAL TABLE clipboard_fts USING fts5(
   content,
   preview,
@@ -71,6 +81,16 @@ FROM clipboard_items;
         }
     }
     Ok(())
+}
+
+fn collect_schema_names(conn: &Connection, sql: &str) -> AppResult<Vec<String>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 #[cfg(test)]
@@ -240,6 +260,71 @@ CREATE VIRTUAL TABLE clipboard_fts USING fts5(content);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM clipboard_fts WHERE clipboard_fts MATCH 'needle'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn init_database_repairs_orphaned_fts_shadow_tables_before_creating_fts() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("clipboard.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+CREATE TABLE clipboard_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content TEXT,
+  content_type TEXT NOT NULL,
+  content_hash TEXT UNIQUE NOT NULL,
+  preview TEXT NOT NULL,
+  metadata TEXT,
+  file_path TEXT,
+  image_data BLOB,
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  use_count INTEGER DEFAULT 0,
+  is_pinned INTEGER DEFAULT 0,
+  is_favorite INTEGER DEFAULT 0
+);
+
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at INTEGER
+);
+
+CREATE TABLE app_blacklist (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_name TEXT NOT NULL,
+  app_path TEXT,
+  is_builtin INTEGER DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE clipboard_fts_data (
+  id INTEGER PRIMARY KEY,
+  block BLOB
+);
+
+INSERT INTO clipboard_items
+  (content, content_type, content_hash, preview, metadata, created_at)
+VALUES
+  ('orphan needle', 'text', 'hash-orphan', 'orphan needle', '{}', 1);
+"#,
+        )
+        .unwrap();
+        drop(conn);
+
+        init_database(&db_path).unwrap();
+
+        let conn = Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_fts WHERE clipboard_fts MATCH 'orphan'",
                 [],
                 |row| row.get(0),
             )

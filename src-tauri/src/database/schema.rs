@@ -41,25 +41,4 @@ CREATE TABLE IF NOT EXISTS app_blacklist (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_blacklist_unique ON app_blacklist(app_name, is_builtin);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS clipboard_fts USING fts5(
-  content,
-  preview,
-  tokenize='unicode61'
-);
-
-CREATE TRIGGER IF NOT EXISTS clipboard_items_ai AFTER INSERT ON clipboard_items BEGIN
-  INSERT INTO clipboard_fts(rowid, content, preview)
-  VALUES (new.id, COALESCE(new.content, ''), COALESCE(new.preview, ''));
-END;
-
-CREATE TRIGGER IF NOT EXISTS clipboard_items_ad AFTER DELETE ON clipboard_items BEGIN
-  DELETE FROM clipboard_fts WHERE rowid = old.id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS clipboard_items_au AFTER UPDATE ON clipboard_items BEGIN
-  DELETE FROM clipboard_fts WHERE rowid = old.id;
-  INSERT INTO clipboard_fts(rowid, content, preview)
-  VALUES (new.id, COALESCE(new.content, ''), COALESCE(new.preview, ''));
-END;
 "#;
