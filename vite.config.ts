@@ -9,6 +9,11 @@ const rendererRoot = resolve(projectRoot, 'src/renderer');
 export default defineConfig({
   root: rendererRoot,
   plugins: [react()],
+  server: {
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true
+  },
   resolve: {
     alias: {
       '@': resolve(projectRoot, 'src/renderer/src'),
