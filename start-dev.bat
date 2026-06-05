@@ -25,6 +25,7 @@ if /I not "%MODE%"=="dev" if /I not "%MODE%"=="build" if /I not "%MODE%"=="check
 set "RJ_ROOT=D:\rj"
 set "RUSTUP_HOME=%RJ_ROOT%\rustup"
 set "CARGO_HOME=%RJ_ROOT%\cargo"
+set "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc"
 set "PNPM_STORE=%RJ_ROOT%\pnpm-store"
 set "TAURI_TOOLS=%RJ_ROOT%\tauri-tools"
 set "LOCALAPPDATA=%RJ_ROOT%\tauri-localappdata"
@@ -58,6 +59,24 @@ if errorlevel 1 (
   goto finish
 )
 
+where rustup >nul 2>nul
+if errorlevel 1 (
+  echo ERROR: rustup was not found in PATH.
+  echo Expected rustup under %CARGO_HOME%\bin.
+  set "EXIT_CODE=1"
+  goto finish
+)
+
+rustup toolchain list | findstr /I /C:"%RUSTUP_TOOLCHAIN%" >nul 2>nul
+if errorlevel 1 (
+  echo Rust stable toolchain is missing. Installing %RUSTUP_TOOLCHAIN% into %RUSTUP_HOME% ...
+  rustup toolchain install "%RUSTUP_TOOLCHAIN%"
+  if errorlevel 1 (
+    set "EXIT_CODE=%ERRORLEVEL%"
+    goto finish
+  )
+)
+
 if not exist "src-tauri\target" mkdir "src-tauri\target"
 if not exist "src-tauri\target\.tauri" (
   mklink /J "src-tauri\target\.tauri" "%TAURI_TOOLS%" >nul
@@ -87,6 +106,7 @@ if /I "%MODE%"=="check" (
   echo Project: %CD%
   echo Rustup: %RUSTUP_HOME%
   echo Cargo: %CARGO_HOME%
+  echo Rust toolchain: %RUSTUP_TOOLCHAIN%
   echo pnpm store: %PNPM_STORE%
   echo Tauri tools: %TAURI_TOOLS%
   set "EXIT_CODE=0"
