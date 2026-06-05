@@ -14,7 +14,7 @@ pub fn init_database(path: impl AsRef<Path>) -> AppResult<()> {
     Ok(())
 }
 
-fn configure_connection(conn: &Connection) -> AppResult<()> {
+pub(crate) fn configure_connection(conn: &Connection) -> AppResult<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;

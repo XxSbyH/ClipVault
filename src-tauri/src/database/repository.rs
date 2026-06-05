@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::database::migrations::init_database;
+use crate::database::migrations::{configure_connection, init_database};
 use crate::{
     errors::AppResult,
     models::{
@@ -26,6 +26,7 @@ impl Repository {
     pub fn open(path: impl AsRef<Path>) -> AppResult<Self> {
         init_database(&path)?;
         let conn = Connection::open(path)?;
+        configure_connection(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -715,6 +716,18 @@ mod tests {
         assert_eq!(duplicate.content.as_deref(), Some("hello"));
         assert_eq!(repo.get_item_by_id(first.id).unwrap().unwrap().id, first.id);
         assert_eq!(repo.count_items().unwrap(), 1);
+    }
+
+    #[test]
+    fn repository_connection_uses_busy_timeout() {
+        let repo = repo();
+        let timeout: i64 = repo
+            .conn()
+            .unwrap()
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(timeout >= 5_000);
     }
 
     #[test]
