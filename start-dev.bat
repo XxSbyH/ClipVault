@@ -8,9 +8,9 @@ if "%MODE%"=="" set "MODE=dev"
 
 if /I not "%MODE%"=="dev" if /I not "%MODE%"=="build" if /I not "%MODE%"=="check" (
   echo Usage:
-  echo   start-dev.cmd         Start Tauri dev mode
-  echo   start-dev.cmd build   Build the installer
-  echo   start-dev.cmd check   Check local environment only
+  echo   start-dev.bat         Start Tauri dev mode
+  echo   start-dev.bat build   Build the installer
+  echo   start-dev.bat check   Check local environment only
   exit /b 2
 )
 
@@ -60,7 +60,7 @@ if not exist "src-tauri\target\.tauri" (
 
 if not exist "node_modules" (
   if /I "%MODE%"=="check" (
-    echo WARN: node_modules is missing. Run start-dev.cmd to install dependencies.
+    echo WARN: node_modules is missing. Run start-dev.bat to install dependencies.
   ) else (
     echo node_modules is missing. Installing dependencies with store %PNPM_STORE% ...
     pnpm install --store-dir "%PNPM_STORE%"
