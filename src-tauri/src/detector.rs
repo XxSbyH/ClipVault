@@ -97,7 +97,10 @@ fn is_url_text(text: &str) -> bool {
 }
 
 fn strip_ascii_case_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-    if text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix) {
+    if text
+        .get(..prefix.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+    {
         Some(&text[prefix.len()..])
     } else {
         None
@@ -184,6 +187,14 @@ mod tests {
     }
 
     #[test]
+    fn treats_non_ascii_prefix_text_as_text_without_panicking() {
+        assert_eq!(
+            detect_content_type("abcdefg你https://example.com"),
+            ClipboardContentType::Text
+        );
+    }
+
+    #[test]
     fn detects_color_content() {
         assert_eq!(detect_content_type("#0D9488"), ClipboardContentType::Color);
     }
@@ -216,7 +227,7 @@ mod tests {
     #[test]
     fn detects_arrow_function_block_as_code() {
         assert_eq!(
-            detect_content_type("const run = () => {}"),
+            detect_content_type("items.map(item => { return item.id; })"),
             ClipboardContentType::Code
         );
     }
