@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { clipboardApi } from '@/lib/tauriApi';
 import { useClipboardStore } from '@/store/clipboardStore';
 
-const ITEM_HEIGHT = 110;
+const ITEM_HEIGHT = 106;
 
 interface RowData {
   items: ClipboardItemType[];
@@ -31,7 +31,10 @@ function filterItems(items: ClipboardItemType[], type: ReturnType<typeof useClip
 function Row({ index, style, data }: ListChildComponentProps<RowData>): JSX.Element {
   const item = data.items[index];
   return (
-    <div style={style} className="px-1 py-[3px]">
+    <div
+      style={style}
+      className="px-1 py-[5px]"
+    >
       <ClipboardItem
         item={item}
         selected={data.selectedId === item.id}
@@ -45,6 +48,21 @@ function Row({ index, style, data }: ListChildComponentProps<RowData>): JSX.Elem
   );
 }
 
+function shouldIgnoreGlobalShortcut(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tagName = target.tagName.toLowerCase();
+  if (['input', 'textarea', 'select', 'button'].includes(tagName)) {
+    return true;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  return Boolean(target.closest('[role="dialog"]'));
+}
+
 export function ClipboardList(): JSX.Element {
   const items = useClipboardStore((state) => state.items);
   const selectedType = useClipboardStore((state) => state.selectedType);
@@ -53,8 +71,9 @@ export function ClipboardList(): JSX.Element {
   const setItems = useClipboardStore((state) => state.setItems);
   const upsertItem = useClipboardStore((state) => state.upsertItem);
   const removeItem = useClipboardStore((state) => state.removeItem);
-  const [height, setHeight] = useState(480);
+  const [height, setHeight] = useState(420);
   const listRef = useRef<List<RowData>>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const filteredItems = useMemo(() => filterItems(items, selectedType), [items, selectedType]);
 
@@ -64,12 +83,23 @@ export function ClipboardList(): JSX.Element {
   );
 
   useEffect(() => {
-    const resize = () => {
-      setHeight(Math.max(280, window.innerHeight - 215));
+    const measure = () => {
+      const measured = containerRef.current?.clientHeight ?? 0;
+      setHeight(Math.max(260, measured || window.innerHeight - 390));
     };
-    resize();
-    window.addEventListener('resize', resize);
-    return () => window.removeEventListener('resize', resize);
+    measure();
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && containerRef.current
+        ? new ResizeObserver(measure)
+        : null;
+    if (containerRef.current && resizeObserver) {
+      resizeObserver.observe(containerRef.current);
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
   }, []);
 
   const refreshHistory = useCallback(() => {
@@ -84,7 +114,10 @@ export function ClipboardList(): JSX.Element {
     (id: number) => {
       void clipboardApi.togglePin(id).then((item) => {
         if (item) {
-          upsertItem(item);
+          const stillExists = useClipboardStore.getState().items.some((current) => current.id === id);
+          if (stillExists) {
+            upsertItem(item);
+          }
         } else {
           refreshHistory();
         }
@@ -97,7 +130,10 @@ export function ClipboardList(): JSX.Element {
     (id: number) => {
       void clipboardApi.toggleFavorite(id).then((item) => {
         if (item) {
-          upsertItem(item);
+          const stillExists = useClipboardStore.getState().items.some((current) => current.id === id);
+          if (stillExists) {
+            upsertItem(item);
+          }
         } else {
           refreshHistory();
         }
@@ -136,12 +172,15 @@ export function ClipboardList(): JSX.Element {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (shouldIgnoreGlobalShortcut(event)) {
+        return;
+      }
       if (event.ctrlKey && event.key.toLowerCase() === 'f') {
         event.preventDefault();
         return;
       }
       if (event.key === 'Escape') {
-        window.close();
+        void clipboardApi.hideWindow();
         return;
       }
       if (filteredItems.length === 0) {
@@ -187,28 +226,33 @@ export function ClipboardList(): JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [filteredItems, onDelete, onPaste, onToggleFavorite, onTogglePin, selectedIndex, selectedItemId, setSelectedItemId]);
 
-  if (filteredItems.length === 0) {
-    return <EmptyState />;
-  }
-
   return (
-    <List
-      ref={listRef}
-      width="100%"
-      height={height}
-      itemCount={filteredItems.length}
-      itemSize={ITEM_HEIGHT}
-      itemData={{
-        items: filteredItems,
-        selectedId: selectedItemId,
-        onPaste,
-        onTogglePin,
-        onToggleFavorite,
-        onDelete,
-        onSelect
-      }}
+    <div
+      ref={containerRef}
+      className="h-full min-h-[260px]"
     >
-      {Row}
-    </List>
+      {filteredItems.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <List
+          ref={listRef}
+          width="100%"
+          height={height}
+          itemCount={filteredItems.length}
+          itemSize={ITEM_HEIGHT}
+          itemData={{
+            items: filteredItems,
+            selectedId: selectedItemId,
+            onPaste,
+            onTogglePin,
+            onToggleFavorite,
+            onDelete,
+            onSelect
+          }}
+        >
+          {Row}
+        </List>
+      )}
+    </div>
   );
 }

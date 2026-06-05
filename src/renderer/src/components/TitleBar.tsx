@@ -4,31 +4,34 @@ import { clipboardApi } from '@/lib/tauriApi';
 
 export function TitleBar(): JSX.Element {
   return (
-    <div className="drag-region flex items-center justify-between border-b border-border bg-card px-3 py-2">
-      <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-        <ClipboardList className="h-4 w-4 text-primary" />
+    <div className="drag-region relative z-20 flex h-10 items-center justify-between px-3 pt-2">
+      <div className="flex items-center gap-2 rounded-full border border-white/70 bg-white/62 px-3 py-1 text-xs font-semibold text-teal-900 shadow-sm backdrop-blur-xl">
+        <ClipboardList className="h-3.5 w-3.5 text-teal-700" />
         <span>ClipVault</span>
       </div>
-      <div className="no-drag flex items-center gap-1">
+
+      <div className="no-drag flex items-center gap-1 rounded-full border border-white/70 bg-white/62 p-1 shadow-sm backdrop-blur-xl">
         <Button
           variant="ghost"
           size="icon"
           title="最小化"
+          className="h-7 w-7 rounded-full hover:bg-teal-50"
           onClick={() => {
             void clipboardApi.minimizeWindow();
           }}
         >
-          <Minus className="h-4 w-4" />
+          <Minus className="h-3.5 w-3.5" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          title="关闭"
+          title="隐藏面板"
+          className="h-7 w-7 rounded-full hover:bg-orange-50 hover:text-orange-700"
           onClick={() => {
             void clipboardApi.hideWindow();
           }}
         >
-          <X className="h-4 w-4" />
+          <X className="h-3.5 w-3.5" />
         </Button>
       </div>
     </div>

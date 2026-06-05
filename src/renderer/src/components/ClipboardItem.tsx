@@ -1,7 +1,8 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import {
   Code2,
+  Copy,
   FileText,
   Folder,
   Image as ImageIcon,
@@ -12,12 +13,11 @@ import {
   Star,
   Trash2
 } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import type { ClipboardItem as ClipboardItemType } from '@shared/types';
 import { Button } from '@/components/ui/button';
 import { ImageViewer } from '@/components/ImageViewer';
 import { clipboardApi } from '@/lib/tauriApi';
 import { cn } from '@/lib/utils';
-import type { ClipboardItem as ClipboardItemType } from '@shared/types';
 
 interface ClipboardItemProps {
   item: ClipboardItemType;
@@ -29,28 +29,50 @@ interface ClipboardItemProps {
   onSelect: (id: number) => void;
 }
 
-function typeIcon(type: ClipboardItemType['contentType']): JSX.Element {
-  switch (type) {
-    case 'url':
-      return <Link2 className="h-4 w-4 text-sky-600" />;
-    case 'code':
-      return <Code2 className="h-4 w-4 text-indigo-600" />;
-    case 'image':
-      return <ImageIcon className="h-4 w-4 text-primary" />;
-    case 'file':
-      return <Folder className="h-4 w-4 text-amber-600" />;
-    case 'color':
-      return <Palette className="h-4 w-4 text-pink-600" />;
-    case 'email':
-      return <Mail className="h-4 w-4 text-emerald-600" />;
-    default:
-      return <FileText className="h-4 w-4 text-muted-foreground" />;
+const TYPE_META: Record<
+  ClipboardItemType['contentType'],
+  { label: string; className: string; icon: JSX.Element }
+> = {
+  text: {
+    label: '文本',
+    className: 'bg-slate-100 text-slate-700',
+    icon: <FileText className="h-4 w-4" />
+  },
+  image: {
+    label: '图片',
+    className: 'bg-teal-100 text-teal-800',
+    icon: <ImageIcon className="h-4 w-4" />
+  },
+  file: {
+    label: '文件',
+    className: 'bg-amber-100 text-amber-800',
+    icon: <Folder className="h-4 w-4" />
+  },
+  url: {
+    label: '链接',
+    className: 'bg-sky-100 text-sky-800',
+    icon: <Link2 className="h-4 w-4" />
+  },
+  code: {
+    label: '代码',
+    className: 'bg-indigo-100 text-indigo-800',
+    icon: <Code2 className="h-4 w-4" />
+  },
+  color: {
+    label: '颜色',
+    className: 'bg-pink-100 text-pink-800',
+    icon: <Palette className="h-4 w-4" />
+  },
+  email: {
+    label: '邮箱',
+    className: 'bg-emerald-100 text-emerald-800',
+    icon: <Mail className="h-4 w-4" />
   }
-}
+};
 
-function formatFileSize(value: unknown): string {
+function formatFileSize(value: unknown): string | null {
   if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) {
-    return '未知大小';
+    return null;
   }
   if (value < 1024) {
     return `${value} B`;
@@ -72,163 +94,167 @@ function ClipboardItemView({
 }: ClipboardItemProps): JSX.Element {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [showViewer, setShowViewer] = useState(false);
+  const typeMeta = TYPE_META[item.contentType];
 
   useEffect(() => {
     if (item.contentType !== 'image') {
       setImageUrl(null);
       return;
     }
-    void clipboardApi.getImageDataUrl(item.id).then(setImageUrl);
+    setImageUrl(null);
+    let cancelled = false;
+    const imageId = item.id;
+    void clipboardApi
+      .getImageDataUrl(imageId)
+      .then((url) => {
+        if (!cancelled && imageId === item.id) {
+          setImageUrl(url);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setImageUrl(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [item.contentType, item.id]);
 
-  const imageTitle = useMemo(() => {
-    const filename = item.metadata.fileName;
-    if (typeof filename === 'string' && filename.trim()) {
-      return filename;
-    }
-    if (item.preview?.trim()) {
-      return item.preview;
-    }
-    return '未命名图片.png';
-  }, [item.metadata.fileName, item.preview]);
+  const imageTitle =
+    typeof item.metadata.fileName === 'string' && item.metadata.fileName.trim()
+      ? item.metadata.fileName
+      : item.preview || '剪贴板图片';
 
-  const baseClass = cn(
-    'clipboard-item-card group w-full min-h-[88px] rounded-lg border border-border bg-card p-3 transition-colors duration-100',
-    'hover:border-primary/40 hover:bg-accent/30',
-    selected && 'ring-2 ring-primary/80'
-  );
+  const size = formatFileSize(item.metadata.fileSize ?? item.metadata.compressedSize);
+  const time = formatDistanceToNow(new Date(item.createdAt), { addSuffix: true });
 
   const actionButtons = (
-    <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+    <div className="flex shrink-0 items-center gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100">
       <Button
         variant="ghost"
         size="icon"
+        className="h-8 w-8 rounded-full hover:bg-teal-50"
         onClick={(event) => {
           event.stopPropagation();
           onTogglePin(item.id);
         }}
-        title="置顶"
+        title={item.isPinned ? '取消置顶' : '置顶'}
       >
-        <Pin className={cn('h-4 w-4', item.isPinned ? 'fill-primary text-primary' : 'text-muted-foreground')} />
+        <Pin className={cn('h-4 w-4', item.isPinned ? 'fill-teal-700 text-teal-700' : 'text-muted-foreground')} />
       </Button>
       <Button
         variant="ghost"
         size="icon"
+        className="h-8 w-8 rounded-full hover:bg-amber-50"
         onClick={(event) => {
           event.stopPropagation();
           onToggleFavorite(item.id);
         }}
-        title="收藏"
+        title={item.isFavorite ? '取消收藏' : '收藏'}
       >
         <Star className={cn('h-4 w-4', item.isFavorite ? 'fill-amber-500 text-amber-500' : 'text-muted-foreground')} />
       </Button>
       <Button
         variant="ghost"
         size="icon"
+        className="h-8 w-8 rounded-full hover:bg-red-50 hover:text-red-600"
         onClick={(event) => {
           event.stopPropagation();
           onDelete(item.id);
         }}
         title="删除"
       >
-        <Trash2 className="h-4 w-4 text-muted-foreground hover:text-red-500" />
+        <Trash2 className="h-4 w-4" />
       </Button>
     </div>
   );
 
-  if (item.contentType === 'image') {
-    return (
-      <>
-        <div
-          className={baseClass}
-          role="button"
-          tabIndex={0}
-          onClick={() => onSelect(item.id)}
-          title="点击缩略图查看，点击信息区复制"
-        >
-          <div className="flex items-start gap-3">
-            <button
-              type="button"
-              className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-md border border-border hover:opacity-90"
-              onClick={(event) => {
-                event.stopPropagation();
-                onSelect(item.id);
-                setShowViewer(true);
-              }}
-            >
-              {imageUrl ? (
-                <img
-                  src={imageUrl}
-                  alt={imageTitle}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center">
-                  <ImageIcon className="h-5 w-5 text-muted-foreground" />
-                </div>
-              )}
-            </button>
-
-            <div
-              className="min-w-0 flex-1 cursor-copy rounded-md p-1 hover:bg-accent/40"
-              onClick={(event) => {
-                event.stopPropagation();
-                onSelect(item.id);
-                onPaste(item.id);
-              }}
-            >
-              <p className="truncate text-sm font-medium">{imageTitle}</p>
-              <div className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
-                <span>{formatFileSize(item.metadata.fileSize ?? item.metadata.compressedSize)}</span>
-                <span>·</span>
-                <span>{formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}</span>
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground/70">点击查看 · 点此复制</p>
-            </div>
-
-            {actionButtons}
-          </div>
-        </div>
-
-        {imageUrl ? (
-          <ImageViewer
-            open={showViewer}
-            imageUrl={imageUrl}
-            title={imageTitle}
-            onClose={() => setShowViewer(false)}
-            onCopy={() => {
-              onPaste(item.id);
-            }}
-          />
-        ) : null}
-      </>
-    );
-  }
-
   return (
-    <div
-      className={baseClass}
-      onClick={() => {
-        onSelect(item.id);
-        onPaste(item.id);
-      }}
-      role="button"
-      tabIndex={0}
-      title="点击复制到剪贴板"
-    >
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 h-5 w-5 flex-shrink-0">{typeIcon(item.contentType)}</div>
-        <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-sm leading-snug">{item.preview}</p>
-          <div className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}</span>
-            <span>·</span>
-            <Badge>{item.contentType}</Badge>
+    <>
+      <article
+        className={cn(
+          'clipboard-item-card group grid h-[96px] w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border bg-white/82 p-3 text-left shadow-sm transition',
+          'hover:-translate-y-0.5 hover:border-teal-200 hover:bg-white hover:shadow-[0_12px_28px_rgba(15,118,110,0.12)]',
+          selected
+            ? 'border-teal-500 ring-4 ring-teal-100'
+            : 'border-white/80'
+        )}
+        role="button"
+        tabIndex={0}
+        aria-pressed={selected}
+        title="点击粘贴到当前应用"
+        onClick={() => {
+          onSelect(item.id);
+          onPaste(item.id);
+        }}
+      >
+        {item.contentType === 'image' ? (
+          <button
+            type="button"
+            className="h-16 w-16 overflow-hidden rounded-xl border border-teal-100 bg-teal-50"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect(item.id);
+              setShowViewer(true);
+            }}
+            title="预览图片"
+          >
+            {imageUrl ? (
+              <img
+                src={imageUrl}
+                alt={imageTitle}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <span className="flex h-full w-full items-center justify-center text-teal-700">
+                <ImageIcon className="h-5 w-5" />
+              </span>
+            )}
+          </button>
+        ) : (
+          <div className={cn('flex h-12 w-12 items-center justify-center rounded-xl', typeMeta.className)}>
+            {typeMeta.icon}
+          </div>
+        )}
+
+        <div className="min-w-0">
+          <div className="mb-1.5 flex items-center gap-2">
+            <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-bold', typeMeta.className)}>
+              {typeMeta.label}
+            </span>
+            {item.isPinned ? <span className="h-1.5 w-1.5 rounded-full bg-teal-600" title="已置顶" /> : null}
+            {item.isFavorite ? <span className="h-1.5 w-1.5 rounded-full bg-amber-500" title="已收藏" /> : null}
+          </div>
+          <p className="line-clamp-2 break-words text-sm font-semibold leading-5 text-slate-900">
+            {item.preview || item.content || '空内容'}
+          </p>
+          <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span>{time}</span>
+            {size ? <span>{size}</span> : null}
+            {item.useCount > 0 ? <span>{item.useCount} 次</span> : null}
           </div>
         </div>
-        {actionButtons}
-      </div>
-    </div>
+
+        <div className="flex items-center gap-2">
+          <div className="hidden rounded-full bg-orange-50 px-2 py-1 text-[11px] font-bold text-orange-700 sm:block">
+            <Copy className="mr-1 inline h-3 w-3" />
+            Enter
+          </div>
+          {actionButtons}
+        </div>
+      </article>
+
+      {item.contentType === 'image' && imageUrl ? (
+        <ImageViewer
+          open={showViewer}
+          imageUrl={imageUrl}
+          title={imageTitle}
+          onClose={() => setShowViewer(false)}
+          onCopy={() => onPaste(item.id)}
+        />
+      ) : null}
+    </>
   );
 }
 

@@ -3,19 +3,20 @@
 @tailwind utilities;
 
 :root {
-  --background: 240 20% 99%;
-  --foreground: 222 47% 11%;
+  --background: 174 85% 97%;
+  --foreground: 174 61% 18%;
   --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --border: 220 13% 91%;
-  --input: 220 13% 91%;
-  --muted: 220 14% 96%;
-  --muted-foreground: 220 9% 46%;
-  --primary: 166 69% 39%;
+  --card-foreground: 174 61% 18%;
+  --border: 172 54% 84%;
+  --input: 172 54% 84%;
+  --muted: 173 58% 94%;
+  --muted-foreground: 179 24% 38%;
+  --primary: 174 84% 32%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 192 40% 96%;
-  --secondary-foreground: 166 69% 30%;
-  --ring: 166 69% 39%;
+  --secondary: 170 76% 92%;
+  --secondary-foreground: 174 71% 24%;
+  --ring: 174 84% 32%;
+  --accent-warm: 24 95% 53%;
 }
 
 * {
@@ -31,15 +32,24 @@ body,
 
 body {
   @apply bg-background text-foreground antialiased;
+  margin: 0;
   font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
+    'Plus Jakarta Sans',
     'Microsoft YaHei',
     'PingFang SC',
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
 }
 
 .drag-region {
@@ -52,29 +62,106 @@ body {
 }
 
 .app-shell {
-  background: hsl(var(--background));
+  background:
+    radial-gradient(circle at 10% 8%, rgb(20 184 166 / 24%), transparent 28%),
+    radial-gradient(circle at 86% 18%, rgb(249 115 22 / 18%), transparent 25%),
+    linear-gradient(155deg, #ecfdf5 0%, #f0fdfa 46%, #fff7ed 100%);
 }
 
-.main-content {
-  background: hsl(var(--secondary) / 0.2);
+.panel-ambient {
+  pointer-events: none;
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(20px);
+  opacity: 0.7;
 }
 
-.search-input {
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+.panel-ambient-a {
+  left: -86px;
+  top: 122px;
+  height: 220px;
+  width: 220px;
+  background: rgb(13 148 136 / 20%);
 }
 
-.search-input:focus {
-  box-shadow:
-    0 0 0 3px hsl(var(--primary) / 0.14),
-    0 1px 3px rgb(0 0 0 / 0.1);
+.panel-ambient-b {
+  bottom: 76px;
+  right: -94px;
+  height: 230px;
+  width: 230px;
+  background: rgb(249 115 22 / 15%);
+}
+
+.command-header,
+.list-surface,
+.detail-panel {
+  animation: panel-enter 260ms ease both;
+}
+
+.list-surface {
+  animation-delay: 40ms;
+}
+
+.detail-panel {
+  animation-delay: 80ms;
+}
+
+.clipboard-item-card {
+  will-change: transform;
+}
+
+.line-clamp-2,
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-2 {
+  -webkit-line-clamp: 2;
+}
+
+.line-clamp-3 {
+  -webkit-line-clamp: 3;
 }
 
 .image-viewer-overlay {
-  animation: fade-in 0.2s ease-out;
+  animation: fade-in 0.18s ease-out;
 }
 
 .image-viewer-content {
-  animation: scale-in 0.2s ease-out;
+  animation: scale-in 0.18s ease-out;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgb(13 148 136 / 28%);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(13 148 136 / 42%);
+  background-clip: content-box;
+}
+
+@keyframes panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes fade-in {
@@ -89,10 +176,21 @@ body {
 @keyframes scale-in {
   from {
     opacity: 0;
-    transform: scale(0.94);
+    transform: scale(0.96);
   }
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

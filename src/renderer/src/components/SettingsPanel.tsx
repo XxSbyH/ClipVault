@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { X } from 'lucide-react';
 import { DEFAULT_HOTKEYS, type AppSettings, type BlacklistApp, type HotkeySettings } from '@shared/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,9 +18,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { clipboardApi } from '@/lib/tauriApi';
 import { useClipboardStore } from '@/store/clipboardStore';
 
+type SettingsTab = 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about';
+
 interface SettingsPanelProps {
   open: boolean;
-  initialTab?: 'general' | 'hotkeys';
+  initialTab?: SettingsTab;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -36,8 +39,8 @@ const HOTKEY_DESCRIPTIONS: Record<keyof HotkeySettings, string> = {
   openPanel: '显示或隐藏主面板',
   search: '打开面板并自动聚焦搜索框',
   pause: '临时暂停或恢复剪贴板监听',
-  clear: '清空历史（保留收藏项）',
-  quickPastePrev: '无需打开面板，直接粘贴更早的内容',
+  clear: '清空非收藏历史记录',
+  quickPastePrev: '无需打开面板，直接粘贴更旧的内容',
   quickPasteNext: '无需打开面板，向更新的历史前进'
 };
 
@@ -45,25 +48,28 @@ const NORMAL_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['openPanel', 'search', 
 const QUICK_PASTE_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['quickPastePrev', 'quickPasteNext'];
 const MODIFIER_KEYS = ['Ctrl', 'Alt', 'Shift', 'Meta'] as const;
 type ModifierKey = (typeof MODIFIER_KEYS)[number];
+
 const WHEEL_MODIFIER_OPTIONS: Array<{ value: AppSettings['wheelShortcutModifier']; label: string }> = [
   { value: 'ctrl', label: 'Ctrl' },
   { value: 'alt', label: 'Alt' },
   { value: 'shift', label: 'Shift' },
   { value: 'ctrl+alt', label: 'Ctrl+Alt' }
 ];
+
 const WHEEL_SCOPE_OPTIONS: Array<{ value: AppSettings['wheelShortcutScope']; label: string }> = [
   { value: 'global', label: '全局生效' },
   { value: 'panel-only', label: '仅面板打开时' }
 ];
+
 const DISPLAY_TOKEN_MAP: Record<string, string> = {
   CommandOrControl: 'Ctrl',
   Command: 'Cmd',
   Meta: 'Win',
   Super: 'Win',
-  Left: '←',
-  Right: '→',
-  Up: '↑',
-  Down: '↓'
+  Left: 'Left',
+  Right: 'Right',
+  Up: 'Up',
+  Down: 'Down'
 };
 
 function isModifierKey(token: string): token is ModifierKey {
@@ -113,10 +119,6 @@ function formatHotkeyLabel(value: string): string {
     .join('+');
 }
 
-async function saveSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): Promise<AppSettings> {
-  return clipboardApi.updateSetting(key, value);
-}
-
 export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: SettingsPanelProps): JSX.Element {
   const settings = useClipboardStore((state) => state.settings);
   const setSettings = useClipboardStore((state) => state.setSettings);
@@ -125,39 +127,84 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
 
   const [blacklist, setBlacklist] = useState<BlacklistApp[]>([]);
   const [newAppName, setNewAppName] = useState('');
-  const [activeTab, setActiveTab] = useState('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [showBlacklistHelp, setShowBlacklistHelp] = useState(false);
   const [hotkeys, setHotkeys] = useState<HotkeySettings | null>(null);
   const [editingHotkey, setEditingHotkey] = useState<keyof HotkeySettings | null>(null);
   const [hotkeyConflicts, setHotkeyConflicts] = useState<string[]>([]);
   const [recordingPreview, setRecordingPreview] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
   const [clearState, setClearState] = useState<'idle' | 'clearing' | 'success' | 'error'>('idle');
   const [clearMessage, setClearMessage] = useState('');
   const pressedKeysRef = useRef<Set<string>>(new Set());
-  const candidateComboRef = useRef<string>('');
+  const candidateComboRef = useRef('');
   const clearFeedbackTimerRef = useRef<number | null>(null);
+  const settingsUpdateSeqRef = useRef<Partial<Record<keyof AppSettings, number>>>({});
+  const hotkeyRecordSeqRef = useRef(0);
+  const openRef = useRef(open);
 
   useEffect(() => {
+    openRef.current = open;
     if (!open) {
+      hotkeyRecordSeqRef.current += 1;
       setEditingHotkey(null);
       setRecordingPreview('');
       pressedKeysRef.current.clear();
       candidateComboRef.current = '';
+      setErrorMessage('');
       setClearState('idle');
       setClearMessage('');
       return;
     }
+
+    let cancelled = false;
     setActiveTab(initialTab);
-    void clipboardApi.getSettings().then(setSettings);
-    void clipboardApi.listBlacklist().then(setBlacklist);
-    void clipboardApi.getHotkeys().then(setHotkeys);
+    setErrorMessage('');
+    void clipboardApi
+      .getSettings()
+      .then((nextSettings) => {
+        if (!cancelled) {
+          setSettings(nextSettings);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setErrorMessage('设置加载失败，请稍后重试。');
+        }
+      });
+    void clipboardApi
+      .listBlacklist()
+      .then((apps) => {
+        if (!cancelled) {
+          setBlacklist(apps);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setErrorMessage('黑名单加载失败，请稍后重试。');
+        }
+      });
+    void clipboardApi
+      .getHotkeys()
+      .then((nextHotkeys) => {
+        if (!cancelled) {
+          setHotkeys(nextHotkeys);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setErrorMessage('快捷键加载失败，请稍后重试。');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, initialTab, setSettings]);
 
   useEffect(() => {
     return () => {
       if (clearFeedbackTimerRef.current) {
         window.clearTimeout(clearFeedbackTimerRef.current);
-        clearFeedbackTimerRef.current = null;
       }
     };
   }, []);
@@ -180,12 +227,26 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
   );
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    void saveSetting(key, value).then(setSettings);
+    const seq = (settingsUpdateSeqRef.current[key] ?? 0) + 1;
+    settingsUpdateSeqRef.current[key] = seq;
+    setErrorMessage('');
+    void clipboardApi
+      .updateSetting(key, value)
+      .then((nextSettings) => {
+        if (settingsUpdateSeqRef.current[key] === seq) {
+          const latestSettings = useClipboardStore.getState().settings ?? nextSettings;
+          setSettings({ ...latestSettings, [key]: nextSettings[key] });
+        }
+      })
+      .catch(() => {
+        if (settingsUpdateSeqRef.current[key] === seq) {
+          setErrorMessage('设置保存失败，请稍后重试。');
+        }
+      });
   };
 
   const handleClearHistory = async () => {
-    const accepted = confirm('确认清空非收藏历史吗？');
-    if (!accepted) {
+    if (!window.confirm('确认清空非收藏历史吗？收藏项会保留。')) {
       return;
     }
 
@@ -195,7 +256,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
     }
 
     setClearState('clearing');
-    setClearMessage('正在清理历史，请稍候...');
+    setClearMessage('正在清理历史，请稍候。');
 
     try {
       const result = await clipboardApi.clearHistory();
@@ -204,16 +265,15 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       }
       const latestItems = await clipboardApi.getHistory(300);
       setItems(latestItems);
-      const removedCount = Math.max(0, result.deleted ?? 0);
       setClearState('success');
       setClearMessage(
-        removedCount > 0
-          ? `清理完成，已清除 ${removedCount} 条非收藏记录`
-          : '清理完成，当前没有可清理的非收藏记录'
+        result.deleted > 0
+          ? `清理完成，已删除 ${result.deleted} 条非收藏记录。`
+          : '清理完成，当前没有可删除的非收藏记录。'
       );
     } catch {
       setClearState('error');
-      setClearMessage('清理失败，请重试');
+      setClearMessage('清理失败，请稍后重试。');
     }
 
     clearFeedbackTimerRef.current = window.setTimeout(() => {
@@ -228,28 +288,42 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
     if (!appName) {
       return;
     }
-    void clipboardApi.addBlacklist(appName).then(() => {
-      setNewAppName('');
-      void clipboardApi.listBlacklist().then(setBlacklist);
-    });
+    setErrorMessage('');
+    void clipboardApi
+      .addBlacklist(appName)
+      .then(() => {
+        setNewAppName('');
+        return clipboardApi.listBlacklist();
+      })
+      .then(setBlacklist)
+      .catch(() => setErrorMessage('黑名单保存失败，请稍后重试。'));
   };
 
   const removeBlacklist = (id: number) => {
-    void clipboardApi.removeBlacklist(id).then(() => {
-      void clipboardApi.listBlacklist().then(setBlacklist);
-    });
+    setErrorMessage('');
+    void clipboardApi
+      .removeBlacklist(id)
+      .then(() => clipboardApi.listBlacklist())
+      .then(setBlacklist)
+      .catch(() => setErrorMessage('黑名单删除失败，请稍后重试。'));
   };
 
   const resetHotkeys = () => {
+    hotkeyRecordSeqRef.current += 1;
     setEditingHotkey(null);
     setRecordingPreview('');
     pressedKeysRef.current.clear();
     candidateComboRef.current = '';
     setHotkeyConflicts([]);
-    void clipboardApi.updateHotkeys(DEFAULT_HOTKEYS).then(setHotkeys);
+    setErrorMessage('');
+    void clipboardApi
+      .updateHotkeys(DEFAULT_HOTKEYS)
+      .then(setHotkeys)
+      .catch(() => setErrorMessage('快捷键恢复失败，请稍后重试。'));
   };
 
   const cancelHotkeyRecording = () => {
+    hotkeyRecordSeqRef.current += 1;
     setEditingHotkey(null);
     setRecordingPreview('');
     pressedKeysRef.current.clear();
@@ -257,6 +331,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
   };
 
   const startHotkeyRecording = (key: keyof HotkeySettings) => {
+    hotkeyRecordSeqRef.current += 1;
     setHotkeyConflicts([]);
     setEditingHotkey(key);
     setRecordingPreview('');
@@ -265,14 +340,13 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
   };
 
   useEffect(() => {
-    if (!editingHotkey || !hotkeys) {
+    if (!open || !editingHotkey || !hotkeys) {
       return;
     }
 
     const updatePreviewFromPressed = () => {
       const ordered = orderHotkeyTokens(Array.from(pressedKeysRef.current));
-      const preview = ordered.join('+');
-      setRecordingPreview(preview);
+      setRecordingPreview(ordered.join('+'));
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -321,23 +395,47 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
         const editingKey = editingHotkey;
         const next = { ...hotkeys, [editingKey]: combo };
         cancelHotkeyRecording();
+        const operationSeq = hotkeyRecordSeqRef.current;
+        const isRecordingRequestActive = () => openRef.current && hotkeyRecordSeqRef.current === operationSeq;
 
-        void clipboardApi.checkHotkeyConflicts(next).then((conflicts) => {
-          setHotkeyConflicts(conflicts);
-          if (conflicts.length > 0) {
-            return;
-          }
-          void clipboardApi.checkHotkeyAvailable(combo).then((available) => {
-            if (!available) {
-              const accepted = confirm(`快捷键 ${formatHotkeyLabel(combo)} 可能被其他应用占用，仍然保存吗？`);
+        void (async () => {
+          try {
+            const conflicts = await clipboardApi.checkHotkeyConflicts(next);
+            if (!isRecordingRequestActive()) {
+              return;
+            }
+            setHotkeyConflicts(conflicts);
+            if (conflicts.length > 0) {
+              return;
+            }
+
+            const available = await clipboardApi.checkHotkeyAvailable(combo);
+            if (!isRecordingRequestActive()) {
+              return;
+            }
+            if (available === false) {
+              const accepted = window.confirm(
+                `快捷键 ${formatHotkeyLabel(combo)} 可能被其他应用占用，仍然保存吗？`
+              );
+              if (!isRecordingRequestActive()) {
+                return;
+              }
               if (!accepted) {
                 setHotkeyConflicts([`快捷键可能被其他应用占用: ${formatHotkeyLabel(combo)}`]);
                 return;
               }
             }
-            void clipboardApi.updateHotkeys({ [editingKey]: combo }).then(setHotkeys);
-          });
-        });
+
+            const updated = await clipboardApi.updateHotkeys({ [editingKey]: combo });
+            if (isRecordingRequestActive()) {
+              setHotkeys(updated);
+            }
+          } catch {
+            if (isRecordingRequestActive()) {
+              setErrorMessage('快捷键保存失败，请稍后重试。');
+            }
+          }
+        })();
         return;
       }
 
@@ -351,27 +449,29 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [editingHotkey, hotkeys]);
+  }, [editingHotkey, hotkeys, open]);
 
   return (
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
     >
-      <DialogContent className="max-h-[90vh] overflow-auto">
-        <DialogHeader className="flex flex-row items-start justify-between gap-2">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-auto rounded-3xl border-teal-100 bg-white/95 p-5 shadow-2xl">
+        <DialogHeader className="flex flex-row items-start justify-between gap-3">
           <div className="space-y-1">
-            <DialogTitle>设置</DialogTitle>
-            <DialogDescription>管理保留策略、隐私和存储行为</DialogDescription>
+            <DialogTitle className="text-lg font-black">设置</DialogTitle>
+            <DialogDescription>管理保留策略、隐私过滤、存储限制和快捷键。</DialogDescription>
           </div>
-          <DialogClose />
+          <DialogClose className="rounded-full">
+            <X className="h-4 w-4" />
+          </DialogClose>
         </DialogHeader>
 
         <Tabs
           value={activeTab}
-          onValueChange={setActiveTab}
+          onValueChange={(value) => setActiveTab(value as SettingsTab)}
         >
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-5 rounded-2xl bg-teal-50 p-1">
             <TabsTrigger value="general">常规</TabsTrigger>
             <TabsTrigger value="privacy">隐私</TabsTrigger>
             <TabsTrigger value="storage">存储</TabsTrigger>
@@ -379,38 +479,39 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
             <TabsTrigger value="about">关于</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="general" className="space-y-4">
-            <div className="grid grid-cols-[1fr_160px] items-center gap-4 py-1">
-              <span className="text-sm font-medium">保留天数</span>
-              <div className="flex w-40 justify-end">
-                <select
-                  className="h-9 w-40 rounded-md border border-input bg-background px-3 text-sm"
-                  value={safeSettings.retentionDays}
-                  onChange={(event) => update('retentionDays', Number(event.target.value))}
-                >
-                  <option value={7}>7 天</option>
-                  <option value={14}>14 天</option>
-                  <option value={30}>30 天</option>
-                  <option value={3650}>永久</option>
-                </select>
-              </div>
+          {errorMessage ? (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {errorMessage}
             </div>
-            <div className="grid grid-cols-[1fr_160px] items-center gap-4 py-1">
-              <span className="text-sm font-medium">最大条目数</span>
-              <div className="flex w-40 justify-end">
-                <Input
-                  type="number"
-                  min={100}
-                  max={10000}
-                  value={safeSettings.maxItems}
-                  onChange={(event) => update('maxItems', Number(event.target.value))}
-                  className="w-40"
-                />
-              </div>
+          ) : null}
+
+          <TabsContent value="general" className="space-y-4 pt-3">
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-teal-50/40 p-3">
+              <span className="text-sm font-semibold">保留时长</span>
+              <select
+                className="h-10 rounded-xl border border-teal-100 bg-white px-3 text-sm"
+                value={safeSettings.retentionDays}
+                onChange={(event) => update('retentionDays', Number(event.target.value))}
+              >
+                <option value={7}>7 天</option>
+                <option value={14}>14 天</option>
+                <option value={30}>30 天</option>
+                <option value={3650}>永久</option>
+              </select>
             </div>
-            <div className="grid grid-cols-[1fr_160px] items-center gap-4 py-1">
-              <span className="text-sm font-medium">开机自启动</span>
-              <div className="flex w-40 justify-end">
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+              <span className="text-sm font-semibold">最大条目数</span>
+              <Input
+                type="number"
+                min={100}
+                max={10000}
+                value={safeSettings.maxItems}
+                onChange={(event) => update('maxItems', Number(event.target.value))}
+              />
+            </div>
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+              <span className="text-sm font-semibold">开机自启动</span>
+              <div className="flex justify-end">
                 <Switch
                   checked={safeSettings.launchOnStartup}
                   onCheckedChange={(checked) => update('launchOnStartup', checked)}
@@ -418,106 +519,95 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
               </div>
             </div>
             <Separator />
-            <Button
-              variant="destructive"
-              disabled={clearState === 'clearing'}
-              onClick={() => {
-                void handleClearHistory();
-              }}
-            >
-              {clearState === 'clearing' ? '清理中...' : '清空历史（保留收藏）'}
-            </Button>
-            {clearState === 'clearing' ? (
-              <div className="space-y-2 rounded-md border border-border bg-muted/40 px-3 py-2">
-                <p className="text-xs text-muted-foreground">{clearMessage}</p>
-                <div className="h-1.5 w-full overflow-hidden rounded bg-muted">
-                  <div className="h-full w-1/3 animate-pulse rounded bg-primary" />
-                </div>
-              </div>
-            ) : null}
-            {clearState === 'success' ? (
-              <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                {clearMessage}
-              </div>
-            ) : null}
-            {clearState === 'error' ? (
-              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                {clearMessage}
-              </div>
-            ) : null}
+            <div className="space-y-2 rounded-2xl border border-orange-100 bg-orange-50/50 p-3">
+              <p className="text-sm font-semibold text-orange-900">清理历史</p>
+              <p className="text-xs text-orange-700">只清空非收藏项，收藏项永久保留。</p>
+              <Button
+                variant="destructive"
+                disabled={clearState === 'clearing'}
+                onClick={() => {
+                  void handleClearHistory();
+                }}
+              >
+                {clearState === 'clearing' ? '清理中...' : '清空历史'}
+              </Button>
+              {clearMessage ? (
+                <p className="rounded-xl bg-white/75 px-3 py-2 text-xs text-orange-800">{clearMessage}</p>
+              ) : null}
+            </div>
           </TabsContent>
 
-          <TabsContent value="privacy" className="space-y-4">
-            <div className="grid grid-cols-[1fr_160px] items-center gap-4 border-b border-border py-3">
-              <div className="min-w-0 pr-4">
-                <p className="text-sm font-medium">启用敏感内容过滤</p>
-                <p className="mt-1 text-xs text-muted-foreground">自动跳过密码、卡号等敏感内容</p>
+          <TabsContent value="privacy" className="space-y-4 pt-3">
+            <div className="grid grid-cols-[1fr_120px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+              <div>
+                <p className="text-sm font-semibold">启用敏感内容过滤</p>
+                <p className="mt-1 text-xs text-muted-foreground">自动跳过密码、卡号、令牌等敏感内容。</p>
               </div>
-              <div className="flex w-40 justify-end">
+              <div className="flex justify-end">
                 <Switch
                   checked={safeSettings.enableSensitiveFilter}
                   onCheckedChange={(checked) => update('enableSensitiveFilter', checked)}
                 />
               </div>
             </div>
-            <div className="grid grid-cols-[1fr_160px] items-center gap-4 border-b border-border py-3">
-              <div className="min-w-0 pr-4">
-                <p className="text-sm font-medium">启用应用黑名单</p>
-                <p className="mt-1 text-xs text-muted-foreground">黑名单应用中的复制内容不会记录</p>
+            <div className="grid grid-cols-[1fr_120px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+              <div>
+                <p className="text-sm font-semibold">启用应用黑名单</p>
+                <p className="mt-1 text-xs text-muted-foreground">在黑名单应用中复制的内容不会被记录。</p>
               </div>
-              <div className="flex w-40 justify-end">
+              <div className="flex justify-end">
                 <Switch
                   checked={safeSettings.enableBlacklist}
                   onCheckedChange={(checked) => update('enableBlacklist', checked)}
                 />
               </div>
             </div>
-            <div className="space-y-2">
+
+            <div className="space-y-3 rounded-2xl border border-teal-100 bg-teal-50/35 p-3">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-medium">黑名单应用</p>
+                <p className="text-sm font-semibold">黑名单应用</p>
                 <button
                   type="button"
-                  className="text-xs text-muted-foreground hover:text-foreground"
+                  className="text-xs font-semibold text-teal-700 hover:text-teal-900"
                   onClick={() => setShowBlacklistHelp((prev) => !prev)}
                 >
-                  {showBlacklistHelp ? '收起' : '使用说明'}
+                  {showBlacklistHelp ? '收起说明' : '使用说明'}
                 </button>
               </div>
               {showBlacklistHelp ? (
-                <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-                  <p className="font-medium text-foreground">添加示例</p>
-                  <p className="mt-1">`chrome.exe`、`1Password`、`网上银行`</p>
-                  <p className="mt-2 text-amber-600">提示：可在任务管理器查看进程名</p>
+                <div className="rounded-xl bg-white/80 p-3 text-xs leading-5 text-muted-foreground">
+                  添加进程名或应用名即可，例如 chrome.exe、1Password、Bitwarden、KeePass。
                 </div>
               ) : null}
               <div className="flex items-center gap-2">
                 <Input
                   value={newAppName}
                   onChange={(event) => setNewAppName(event.target.value)}
-                  placeholder="例如：chrome.exe 或 1Password"
+                  placeholder="例如 chrome.exe 或 1Password"
                 />
                 <Button
                   onClick={addBlacklist}
                   disabled={!newAppName.trim()}
-                  className="h-10 w-20 shrink-0 whitespace-nowrap px-0"
+                  className="w-20"
                 >
                   添加
                 </Button>
               </div>
-              <div className="max-h-40 space-y-2 overflow-auto pr-1">
+              <div className="max-h-44 space-y-2 overflow-auto pr-1">
                 {blacklist.map((app) => (
                   <div
                     key={app.id}
-                    className="flex items-center justify-between rounded border border-border px-3 py-2 text-sm"
+                    className="flex items-center justify-between rounded-xl border border-teal-100 bg-white px-3 py-2 text-sm"
                   >
                     <div className="flex min-w-0 items-center gap-2">
-                      {app.isBuiltin ? <Badge>内置</Badge> : <Badge className="bg-primary/10 text-primary">自定义</Badge>}
+                      {app.isBuiltin ? <Badge>内置</Badge> : <Badge className="bg-teal-50 text-teal-700">自定义</Badge>}
                       <span className="truncate">{app.appName}</span>
                     </div>
                     {!app.isBuiltin ? (
                       <Button
                         variant="ghost"
                         size="sm"
+                        className="text-red-600 hover:bg-red-50"
                         onClick={() => removeBlacklist(app.id)}
                       >
                         删除
@@ -529,22 +619,21 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
             </div>
           </TabsContent>
 
-          <TabsContent value="storage" className="space-y-4">
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-sm">文本限制（KB）</span>
+          <TabsContent value="storage" className="space-y-4 pt-3">
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+              <span className="text-sm font-semibold">文本限制（KB）</span>
               <Input
                 type="number"
                 min={10}
                 max={1024}
                 value={safeSettings.textLimitKb}
                 onChange={(event) => update('textLimitKb', Number(event.target.value))}
-                className="w-40"
               />
             </div>
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-sm">图片压缩</span>
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+              <span className="text-sm font-semibold">图片压缩</span>
               <select
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-10 rounded-xl border border-teal-100 bg-white px-3 text-sm"
                 value={safeSettings.imageCompression}
                 onChange={(event) => update('imageCompression', event.target.value as AppSettings['imageCompression'])}
               >
@@ -555,34 +644,32 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
             </div>
           </TabsContent>
 
-          <TabsContent value="hotkeys" className="space-y-3 text-sm">
-            <div className="space-y-1 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-              <p>点击右侧快捷键可重新录入，按下新组合后自动保存。</p>
-              <p>按 `Esc` 可取消录入，若检测到冲突将不会保存。</p>
+          <TabsContent value="hotkeys" className="space-y-4 pt-3 text-sm">
+            <div className="rounded-2xl border border-teal-100 bg-teal-50/45 p-3 text-xs leading-5 text-muted-foreground">
+              点击右侧快捷键重新录入。按 Esc 可取消录入；检测到冲突时不会保存。
             </div>
 
-            <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3">
+            <div className="space-y-3 rounded-2xl border border-teal-100 bg-white p-3">
               <div className="flex items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">鼠标滚轮快捷键</p>
-                  <p className="text-xs text-muted-foreground">按住修饰键并滚轮浏览历史：向上=更旧，向下=更新</p>
+                <div>
+                  <p className="text-sm font-semibold">鼠标滚轮快捷键</p>
+                  <p className="mt-1 text-xs text-muted-foreground">按住修饰键并滚轮浏览历史：向上更旧，向下更新。</p>
                 </div>
                 <Switch
                   checked={safeSettings.wheelShortcutEnabled}
                   onCheckedChange={(checked) => update('wheelShortcutEnabled', checked)}
                 />
               </div>
-
               <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-xs text-muted-foreground">
+                <label className="space-y-1 text-xs font-semibold text-muted-foreground">
                   <span>修饰键</span>
                   <select
-                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                    className="h-10 w-full rounded-xl border border-teal-100 bg-white px-3 text-sm text-foreground"
                     value={safeSettings.wheelShortcutModifier}
+                    disabled={!safeSettings.wheelShortcutEnabled}
                     onChange={(event) =>
                       update('wheelShortcutModifier', event.target.value as AppSettings['wheelShortcutModifier'])
                     }
-                    disabled={!safeSettings.wheelShortcutEnabled}
                   >
                     {WHEEL_MODIFIER_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -591,16 +678,15 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                     ))}
                   </select>
                 </label>
-
-                <label className="space-y-1 text-xs text-muted-foreground">
+                <label className="space-y-1 text-xs font-semibold text-muted-foreground">
                   <span>生效范围</span>
                   <select
-                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                    className="h-10 w-full rounded-xl border border-teal-100 bg-white px-3 text-sm text-foreground"
                     value={safeSettings.wheelShortcutScope}
+                    disabled={!safeSettings.wheelShortcutEnabled}
                     onChange={(event) =>
                       update('wheelShortcutScope', event.target.value as AppSettings['wheelShortcutScope'])
                     }
-                    disabled={!safeSettings.wheelShortcutEnabled}
                   >
                     {WHEEL_SCOPE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -610,79 +696,29 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                   </select>
                 </label>
               </div>
-
-              {safeSettings.wheelShortcutEnabled ? (
-                <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-700">
-                  提示：在浏览器中，{WHEEL_MODIFIER_OPTIONS.find((item) => item.value === safeSettings.wheelShortcutModifier)?.label}
-                  +滚轮可能影响页面缩放，可改为其他修饰键或切到“仅面板打开时”。
-                </div>
-              ) : null}
             </div>
 
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">常规快捷键</p>
-              {NORMAL_HOTKEY_KEYS.map((key) => {
-                const value = hotkeys?.[key] ?? DEFAULT_HOTKEYS[key];
-                return (
-                  <div
-                    key={key}
-                    className="flex items-center justify-between gap-3 border-b border-border py-2"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{HOTKEY_LABELS[key]}</p>
-                      <p className="text-xs text-muted-foreground">{HOTKEY_DESCRIPTIONS[key]}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="rounded-md border border-border px-3 py-1 font-mono text-xs hover:border-primary/40"
-                      onClick={() => startHotkeyRecording(key)}
-                    >
-                      {editingHotkey === key ? (
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                          <span>{recordingPreview ? formatHotkeyLabel(recordingPreview) : '请按组合键...'}</span>
-                        </span>
-                      ) : formatHotkeyLabel(value)}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">快速粘贴</p>
-              {QUICK_PASTE_HOTKEY_KEYS.map((key) => {
-                const value = hotkeys?.[key] ?? DEFAULT_HOTKEYS[key];
-                return (
-                  <div
-                    key={key}
-                    className="flex items-center justify-between gap-3 border-b border-border py-2"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{HOTKEY_LABELS[key]}</p>
-                      <p className="text-xs text-muted-foreground">{HOTKEY_DESCRIPTIONS[key]}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="rounded-md border border-border px-3 py-1 font-mono text-xs hover:border-primary/40"
-                      onClick={() => startHotkeyRecording(key)}
-                    >
-                      {editingHotkey === key ? (
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                          <span>{recordingPreview ? formatHotkeyLabel(recordingPreview) : '请按组合键...'}</span>
-                        </span>
-                      ) : formatHotkeyLabel(value)}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+            <HotkeyGroup
+              title="常规快捷键"
+              keys={NORMAL_HOTKEY_KEYS}
+              hotkeys={hotkeys}
+              editingHotkey={editingHotkey}
+              recordingPreview={recordingPreview}
+              onRecord={startHotkeyRecording}
+            />
+            <HotkeyGroup
+              title="快速粘贴"
+              keys={QUICK_PASTE_HOTKEY_KEYS}
+              hotkeys={hotkeys}
+              editingHotkey={editingHotkey}
+              recordingPreview={recordingPreview}
+              onRecord={startHotkeyRecording}
+            />
 
             {hotkeyConflicts.length > 0 ? (
-              <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-600">
+              <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
                 {hotkeyConflicts.map((item) => (
-                  <p key={item}>• {item}</p>
+                  <p key={item}>{item}</p>
                 ))}
               </div>
             ) : null}
@@ -693,18 +729,72 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 size="sm"
                 onClick={resetHotkeys}
               >
-                恢复默认设置
+                恢复默认快捷键
               </Button>
             </div>
           </TabsContent>
 
-          <TabsContent value="about" className="space-y-2 text-sm">
-            <p>ClipVault v0.1.0</p>
-            <p>当前缓存条目: {itemsCount}</p>
-            <p>数据默认保存在本地 `userData/clipboard.db`</p>
+          <TabsContent value="about" className="space-y-3 pt-3 text-sm">
+            <div className="rounded-2xl border border-teal-100 bg-teal-50/45 p-4">
+              <p className="font-black text-slate-950">ClipVault v0.1.0</p>
+              <p className="mt-2 text-muted-foreground">当前缓存条目：{itemsCount}</p>
+              <p className="mt-1 text-muted-foreground">数据默认保存在本地 Tauri 应用数据目录。</p>
+            </div>
           </TabsContent>
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+interface HotkeyGroupProps {
+  title: string;
+  keys: Array<keyof HotkeySettings>;
+  hotkeys: HotkeySettings | null;
+  editingHotkey: keyof HotkeySettings | null;
+  recordingPreview: string;
+  onRecord: (key: keyof HotkeySettings) => void;
+}
+
+function HotkeyGroup({
+  title,
+  keys,
+  hotkeys,
+  editingHotkey,
+  recordingPreview,
+  onRecord
+}: HotkeyGroupProps): JSX.Element {
+  return (
+    <div className="space-y-2 rounded-2xl border border-teal-100 bg-white p-3">
+      <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">{title}</p>
+      {keys.map((key) => {
+        const value = hotkeys?.[key] ?? DEFAULT_HOTKEYS[key];
+        return (
+          <div
+            key={key}
+            className="flex items-center justify-between gap-3 border-b border-teal-50 py-2 last:border-0"
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">{HOTKEY_LABELS[key]}</p>
+              <p className="text-xs text-muted-foreground">{HOTKEY_DESCRIPTIONS[key]}</p>
+            </div>
+            <button
+              type="button"
+              className="rounded-xl border border-teal-100 bg-teal-50 px-3 py-1.5 font-mono text-xs font-bold text-teal-900 hover:border-teal-300"
+              onClick={() => onRecord(key)}
+            >
+              {editingHotkey === key ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-700" />
+                  <span>{recordingPreview ? formatHotkeyLabel(recordingPreview) : '请按组合键...'}</span>
+                </span>
+              ) : (
+                formatHotkeyLabel(value)
+              )}
+            </button>
+          </div>
+        );
+      })}
+    </div>
   );
 }

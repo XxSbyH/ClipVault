@@ -47,9 +47,10 @@ export function DialogContent({
   if (!ctx?.open) {
     return null;
   }
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm"
       onMouseDown={() => ctx.onOpenChange(false)}
     >
       <div
@@ -77,12 +78,12 @@ export function DialogClose({
       type="button"
       aria-label="关闭"
       className={cn(
-        'inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground',
+        'inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground',
         className
       )}
       onClick={() => ctx?.onOpenChange(false)}
     >
-      {children ?? '×'}
+      {children ?? 'X'}
     </button>
   );
 }

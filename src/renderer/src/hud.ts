@@ -8,19 +8,21 @@ const iconEl = document.getElementById('hud-icon');
 const textEl = document.getElementById('hud-text');
 
 const directionLabel: Record<HudPayload['direction'], string> = {
-  prev: '← 上一项',
-  next: '→ 下一项'
+  prev: '上一项',
+  next: '下一项'
 };
 
-const iconLabel: Record<HudPayload['type'], string> = {
-  text: '📋',
-  image: '🖼️',
-  file: '📄',
-  url: '🔗',
-  code: '💻',
-  color: '🎨',
-  email: '✉️'
+const typeLabel: Record<HudPayload['type'], string> = {
+  text: '文本',
+  image: '图片',
+  file: '文件',
+  url: '链接',
+  code: '代码',
+  color: '颜色',
+  email: '邮箱'
 };
+
+let hideTimer: number | null = null;
 
 clipboardApi.onHudShow((payload: HudPayload) => {
   if (!container || !directionEl || !iconEl || !textEl) {
@@ -28,15 +30,19 @@ clipboardApi.onHudShow((payload: HudPayload) => {
   }
 
   directionEl.textContent = directionLabel[payload.direction];
-  iconEl.textContent = iconLabel[payload.type] ?? '📋';
+  iconEl.textContent = typeLabel[payload.type] ?? '内容';
   textEl.textContent = payload.text || '空内容';
 
-  // 连续触发时保持 HUD 可见，只更新内容，避免“先消失再出现”的闪断感。
-  if (!container.classList.contains('show')) {
-    requestAnimationFrame(() => {
-      container.classList.add('show');
-    });
-    return;
+  if (hideTimer) {
+    window.clearTimeout(hideTimer);
   }
-  container.classList.add('show');
+
+  requestAnimationFrame(() => {
+    container.classList.add('show');
+  });
+
+  hideTimer = window.setTimeout(() => {
+    container.classList.remove('show');
+    hideTimer = null;
+  }, 1400);
 });
