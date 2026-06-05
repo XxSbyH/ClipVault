@@ -11,7 +11,8 @@ if /I not "%MODE%"=="dev" if /I not "%MODE%"=="build" if /I not "%MODE%"=="check
   echo   start-dev.bat         Start Tauri dev mode
   echo   start-dev.bat build   Build the installer
   echo   start-dev.bat check   Check local environment only
-  exit /b 2
+  set "EXIT_CODE=2"
+  goto finish
 )
 
 set "RJ_ROOT=D:\rj"
@@ -38,14 +39,16 @@ where pnpm >nul 2>nul
 if errorlevel 1 (
   echo ERROR: pnpm was not found in PATH.
   echo Install pnpm first, then run this script again.
-  exit /b 1
+  set "EXIT_CODE=1"
+  goto finish
 )
 
 where cargo >nul 2>nul
 if errorlevel 1 (
   echo ERROR: cargo was not found in PATH.
   echo Expected cargo under %CARGO_HOME%\bin.
-  exit /b 1
+  set "EXIT_CODE=1"
+  goto finish
 )
 
 if not exist "src-tauri\target" mkdir "src-tauri\target"
@@ -54,7 +57,8 @@ if not exist "src-tauri\target\.tauri" (
   if errorlevel 1 (
     echo ERROR: failed to create src-tauri\target\.tauri junction.
     echo Target should be %TAURI_TOOLS%.
-    exit /b 1
+    set "EXIT_CODE=1"
+    goto finish
   )
 )
 
@@ -64,7 +68,10 @@ if not exist "node_modules" (
   ) else (
     echo node_modules is missing. Installing dependencies with store %PNPM_STORE% ...
     pnpm install --store-dir "%PNPM_STORE%"
-    if errorlevel 1 exit /b %ERRORLEVEL%
+    if errorlevel 1 (
+      set "EXIT_CODE=%ERRORLEVEL%"
+      goto finish
+    )
   )
 )
 
@@ -75,15 +82,24 @@ if /I "%MODE%"=="check" (
   echo Cargo: %CARGO_HOME%
   echo pnpm store: %PNPM_STORE%
   echo Tauri tools: %TAURI_TOOLS%
-  exit /b 0
+  set "EXIT_CODE=0"
+  goto finish
 )
 
 if /I "%MODE%"=="build" (
   echo Building ClipVault installer...
   pnpm build
-  exit /b %ERRORLEVEL%
+  set "EXIT_CODE=%ERRORLEVEL%"
+  goto finish
 )
 
 echo Starting ClipVault Tauri dev mode...
 pnpm tauri:dev
-exit /b %ERRORLEVEL%
+set "EXIT_CODE=%ERRORLEVEL%"
+goto finish
+
+:finish
+echo.
+echo Script finished with exit code %EXIT_CODE%.
+pause
+exit /b %EXIT_CODE%
