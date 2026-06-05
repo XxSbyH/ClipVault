@@ -241,45 +241,45 @@ impl Repository {
     }
 
     pub fn update_settings(&self, settings: &AppSettings) -> AppResult<()> {
-        let conn = self.conn()?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
         let now = now_timestamp();
-        upsert_setting_locked(&conn, "retentionDays", &settings.retention_days, now)?;
-        upsert_setting_locked(&conn, "maxItems", &settings.max_items, now)?;
+        upsert_setting_locked(&tx, "retentionDays", &settings.retention_days, now)?;
+        upsert_setting_locked(&tx, "maxItems", &settings.max_items, now)?;
         upsert_setting_locked(
-            &conn,
+            &tx,
             "enableSensitiveFilter",
             &settings.enable_sensitive_filter,
             now,
         )?;
-        upsert_setting_locked(&conn, "enableBlacklist", &settings.enable_blacklist, now)?;
-        upsert_setting_locked(&conn, "textLimitKb", &settings.text_limit_kb, now)?;
-        upsert_setting_locked(&conn, "imageCompression", &settings.image_compression, now)?;
-        upsert_setting_locked(&conn, "launchOnStartup", &settings.launch_on_startup, now)?;
+        upsert_setting_locked(&tx, "enableBlacklist", &settings.enable_blacklist, now)?;
+        upsert_setting_locked(&tx, "textLimitKb", &settings.text_limit_kb, now)?;
+        upsert_setting_locked(&tx, "imageCompression", &settings.image_compression, now)?;
+        upsert_setting_locked(&tx, "launchOnStartup", &settings.launch_on_startup, now)?;
         upsert_setting_locked(
-            &conn,
+            &tx,
             "wheelShortcutEnabled",
             &settings.wheel_shortcut_enabled,
             now,
         )?;
         upsert_setting_locked(
-            &conn,
+            &tx,
             "wheelShortcutModifier",
             &settings.wheel_shortcut_modifier,
             now,
         )?;
         upsert_setting_locked(
-            &conn,
+            &tx,
             "wheelShortcutScope",
             &settings.wheel_shortcut_scope,
             now,
         )?;
+        tx.commit()?;
         Ok(())
     }
 
     pub fn update_setting(&self, key: &str, value: Value) -> AppResult<AppSettings> {
-        if !is_app_setting_key(key) {
-            return Err(format!("unknown setting key: {key}").into());
-        }
+        let serialized = serialize_setting_value(key, value)?;
 
         {
             let conn = self.conn()?;
@@ -287,7 +287,7 @@ impl Repository {
                 "INSERT INTO settings (key, value, updated_at)
                  VALUES (?1, ?2, ?3)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                params![key, serde_json::to_string(&value)?, now_timestamp()],
+                params![key, serialized, now_timestamp()],
             )?;
         }
 
@@ -326,27 +326,16 @@ impl Repository {
     }
 
     pub fn update_hotkey_settings(&self, patch: &HotkeySettingsPatch) -> AppResult<HotkeySettings> {
+        let values = hotkey_patch_values(patch)?;
+
         {
-            let conn = self.conn()?;
+            let mut conn = self.conn()?;
+            let tx = conn.transaction()?;
             let now = now_timestamp();
-            if let Some(value) = patch.open_panel.as_deref() {
-                upsert_hotkey_locked(&conn, "openPanel", value, now)?;
+            for (key, value) in values {
+                upsert_hotkey_locked(&tx, key, &value, now)?;
             }
-            if let Some(value) = patch.search.as_deref() {
-                upsert_hotkey_locked(&conn, "search", value, now)?;
-            }
-            if let Some(value) = patch.pause.as_deref() {
-                upsert_hotkey_locked(&conn, "pause", value, now)?;
-            }
-            if let Some(value) = patch.clear.as_deref() {
-                upsert_hotkey_locked(&conn, "clear", value, now)?;
-            }
-            if let Some(value) = patch.quick_paste_prev.as_deref() {
-                upsert_hotkey_locked(&conn, "quickPastePrev", value, now)?;
-            }
-            if let Some(value) = patch.quick_paste_next.as_deref() {
-                upsert_hotkey_locked(&conn, "quickPasteNext", value, now)?;
-            }
+            tx.commit()?;
         }
 
         self.get_hotkey_settings()
@@ -471,20 +460,29 @@ where
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-fn is_app_setting_key(key: &str) -> bool {
-    matches!(
-        key,
-        "retentionDays"
-            | "maxItems"
-            | "enableSensitiveFilter"
-            | "enableBlacklist"
-            | "textLimitKb"
-            | "imageCompression"
-            | "launchOnStartup"
-            | "wheelShortcutEnabled"
-            | "wheelShortcutModifier"
-            | "wheelShortcutScope"
-    )
+fn serialize_setting_value(key: &str, value: Value) -> AppResult<String> {
+    match key {
+        "retentionDays" => serialize_typed_setting::<u32>(key, value),
+        "maxItems" => serialize_typed_setting::<u32>(key, value),
+        "enableSensitiveFilter" => serialize_typed_setting::<bool>(key, value),
+        "enableBlacklist" => serialize_typed_setting::<bool>(key, value),
+        "textLimitKb" => serialize_typed_setting::<u32>(key, value),
+        "imageCompression" => serialize_typed_setting::<ImageCompression>(key, value),
+        "launchOnStartup" => serialize_typed_setting::<bool>(key, value),
+        "wheelShortcutEnabled" => serialize_typed_setting::<bool>(key, value),
+        "wheelShortcutModifier" => serialize_typed_setting::<WheelShortcutModifier>(key, value),
+        "wheelShortcutScope" => serialize_typed_setting::<WheelShortcutScope>(key, value),
+        _ => Err(format!("unknown setting key: {key}").into()),
+    }
+}
+
+fn serialize_typed_setting<T>(key: &str, value: Value) -> AppResult<String>
+where
+    T: DeserializeOwned + serde::Serialize,
+{
+    let typed = serde_json::from_value::<T>(value)
+        .map_err(|_| format!("invalid value for setting {key}"))?;
+    Ok(serde_json::to_string(&typed)?)
 }
 
 fn apply_setting_row(settings: &mut AppSettings, key: &str, value: &str) {
@@ -542,11 +540,44 @@ fn upsert_hotkey_locked(
     value: &str,
     updated_at: i64,
 ) -> AppResult<()> {
-    if value.trim().is_empty() {
-        return Ok(());
-    }
-
     upsert_setting_locked(conn, &format!("hotkey_{key}"), &value, updated_at)
+}
+
+fn hotkey_patch_values(patch: &HotkeySettingsPatch) -> AppResult<Vec<(&'static str, String)>> {
+    let mut values = Vec::new();
+    if let Some(value) = patch.open_panel.as_deref() {
+        values.push(("openPanel", validate_hotkey_value("openPanel", value)?));
+    }
+    if let Some(value) = patch.search.as_deref() {
+        values.push(("search", validate_hotkey_value("search", value)?));
+    }
+    if let Some(value) = patch.pause.as_deref() {
+        values.push(("pause", validate_hotkey_value("pause", value)?));
+    }
+    if let Some(value) = patch.clear.as_deref() {
+        values.push(("clear", validate_hotkey_value("clear", value)?));
+    }
+    if let Some(value) = patch.quick_paste_prev.as_deref() {
+        values.push((
+            "quickPastePrev",
+            validate_hotkey_value("quickPastePrev", value)?,
+        ));
+    }
+    if let Some(value) = patch.quick_paste_next.as_deref() {
+        values.push((
+            "quickPasteNext",
+            validate_hotkey_value("quickPasteNext", value)?,
+        ));
+    }
+    Ok(values)
+}
+
+fn validate_hotkey_value(key: &str, value: &str) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("invalid hotkey_{key}: empty value").into());
+    }
+    Ok(trimmed.to_string())
 }
 
 fn parse_hotkey_value(raw: &str) -> Option<String> {
@@ -560,36 +591,50 @@ fn parse_hotkey_value(raw: &str) -> Option<String> {
 }
 
 fn map_clipboard_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem> {
+    let id: i64 = row.get("id")?;
+    let content: Option<String> = row.get("content")?;
     let metadata_json = row
         .get::<_, Option<String>>("metadata")?
         .unwrap_or_else(|| "{}".to_string());
     let metadata = serde_json::from_str(&metadata_json).unwrap_or_default();
-    let content_type: String = row.get("content_type")?;
+    let content_type = row
+        .get::<_, Option<String>>("content_type")?
+        .unwrap_or_else(|| "text".to_string());
+    let preview = row
+        .get::<_, Option<String>>("preview")?
+        .unwrap_or_else(|| content.clone().unwrap_or_default());
 
     Ok(ClipboardItem {
-        id: row.get("id")?,
-        content: row.get("content")?,
+        id,
+        content,
         content_type: content_type_from_db(&content_type),
-        content_hash: row.get("content_hash")?,
-        preview: row.get("preview")?,
+        content_hash: row
+            .get::<_, Option<String>>("content_hash")?
+            .unwrap_or_default(),
+        preview,
         metadata,
         file_path: row.get("file_path")?,
         image_data: row.get("image_data")?,
-        created_at: row.get("created_at")?,
+        created_at: row.get::<_, Option<i64>>("created_at")?.unwrap_or_default(),
         last_used_at: row.get("last_used_at")?,
-        use_count: row.get("use_count")?,
-        is_pinned: row.get::<_, i64>("is_pinned")? == 1,
-        is_favorite: row.get::<_, i64>("is_favorite")? == 1,
+        use_count: row.get::<_, Option<i64>>("use_count")?.unwrap_or_default(),
+        is_pinned: row.get::<_, Option<i64>>("is_pinned")?.unwrap_or_default() == 1,
+        is_favorite: row
+            .get::<_, Option<i64>>("is_favorite")?
+            .unwrap_or_default()
+            == 1,
     })
 }
 
 fn map_blacklist_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<BlacklistApp> {
     Ok(BlacklistApp {
         id: row.get("id")?,
-        app_name: row.get("app_name")?,
+        app_name: row
+            .get::<_, Option<String>>("app_name")?
+            .unwrap_or_default(),
         app_path: row.get("app_path")?,
-        is_builtin: row.get::<_, i64>("is_builtin")? == 1,
-        created_at: row.get("created_at")?,
+        is_builtin: row.get::<_, Option<i64>>("is_builtin")?.unwrap_or_default() == 1,
+        created_at: row.get::<_, Option<i64>>("created_at")?.unwrap_or_default(),
     })
 }
 
@@ -783,6 +828,28 @@ mod tests {
     }
 
     #[test]
+    fn get_history_tolerates_legacy_rows_with_null_display_fields() {
+        let repo = repo();
+        {
+            let conn = repo.conn().unwrap();
+            conn.execute(
+                "INSERT INTO clipboard_items
+                 (content, content_type, content_hash, preview, metadata, created_at)
+                 VALUES (NULL, NULL, NULL, NULL, NULL, 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let history = repo.get_history(10).unwrap();
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content_type, ClipboardContentType::Text);
+        assert_eq!(history[0].content_hash, "");
+        assert_eq!(history[0].preview, "");
+    }
+
+    #[test]
     fn settings_round_trip_with_legacy_per_key_rows() {
         let repo = repo();
         assert_eq!(repo.get_settings().unwrap(), AppSettings::default());
@@ -817,6 +884,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, "45");
+    }
+
+    #[test]
+    fn update_setting_rejects_invalid_value_without_storing_it() {
+        let repo = repo();
+
+        let error = repo
+            .update_setting("retentionDays", json!("not-a-number"))
+            .unwrap_err();
+        assert!(error.to_string().contains("retentionDays"));
+        assert_eq!(repo.get_settings().unwrap().retention_days, 7);
+
+        let image_error = repo
+            .update_setting("imageCompression", json!("lossless"))
+            .unwrap_err();
+        assert!(image_error.to_string().contains("imageCompression"));
+        assert_eq!(
+            repo.get_settings().unwrap().image_compression,
+            ImageCompression::High
+        );
+
+        let stored_count: i64 = repo
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE key IN ('retentionDays', 'imageCompression')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_count, 0);
     }
 
     #[test]
@@ -862,6 +960,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, "\"Alt+P\"");
+    }
+
+    #[test]
+    fn update_hotkey_settings_rejects_empty_values_without_partial_write() {
+        let repo = repo();
+
+        let result = repo.update_hotkey_settings(&HotkeySettingsPatch {
+            open_panel: Some("Alt+Space".to_string()),
+            pause: Some("   ".to_string()),
+            ..HotkeySettingsPatch::default()
+        });
+
+        assert!(result.unwrap_err().to_string().contains("hotkey_pause"));
+        assert_eq!(
+            repo.get_hotkey_settings().unwrap().open_panel,
+            "CommandOrControl+Shift+V"
+        );
+
+        let stored_count: i64 = repo
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE key LIKE 'hotkey_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_count, 0);
     }
 
     #[test]

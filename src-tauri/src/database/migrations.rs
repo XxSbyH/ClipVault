@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use rusqlite::Connection;
 
@@ -8,24 +8,68 @@ use super::schema::CREATE_SCHEMA_SQL;
 
 pub fn init_database(path: impl AsRef<Path>) -> AppResult<()> {
     let conn = Connection::open(path)?;
+    configure_connection(&conn)?;
     conn.execute_batch(CREATE_SCHEMA_SQL)?;
-    rebuild_fts(&conn)?;
+    ensure_fts(&conn)?;
     Ok(())
 }
 
-fn rebuild_fts(conn: &Connection) -> AppResult<()> {
-    let triggers = collect_schema_names(
-        conn,
-        "SELECT name FROM sqlite_master
-         WHERE type = 'trigger' AND name LIKE 'clipboard_items_%'",
-    )?;
+fn configure_connection(conn: &Connection) -> AppResult<()> {
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(())
+}
 
+fn ensure_fts(conn: &Connection) -> AppResult<()> {
+    if fts_needs_repair(conn)? {
+        rebuild_fts(conn)?;
+    }
+    Ok(())
+}
+
+const FTS_TRIGGERS: [&str; 3] = [
+    "clipboard_items_ai",
+    "clipboard_items_ad",
+    "clipboard_items_au",
+];
+
+fn fts_needs_repair(conn: &Connection) -> AppResult<bool> {
+    if !object_exists(conn, "clipboard_fts", "table")? {
+        return Ok(true);
+    }
+
+    for trigger in FTS_TRIGGERS {
+        if !object_exists(conn, trigger, "trigger")? {
+            return Ok(true);
+        }
+    }
+
+    let item_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM clipboard_items", [], |row| row.get(0))?;
+    match conn.query_row("SELECT COUNT(*) FROM clipboard_fts", [], |row| {
+        row.get::<_, i64>(0)
+    }) {
+        Ok(fts_count) => Ok(fts_count != item_count),
+        Err(_) => Ok(true),
+    }
+}
+
+fn object_exists(conn: &Connection, name: &str, object_type: &str) -> AppResult<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1 AND type = ?2)",
+        (name, object_type),
+        |row| row.get::<_, i64>(0),
+    )? == 1)
+}
+
+fn rebuild_fts(conn: &Connection) -> AppResult<()> {
     conn.execute_batch("BEGIN IMMEDIATE")?;
     let result = (|| -> AppResult<()> {
-        for trigger in triggers {
+        for trigger in FTS_TRIGGERS {
             conn.execute_batch(&format!(
                 "DROP TRIGGER IF EXISTS {};",
-                quote_identifier(&trigger)
+                quote_identifier(trigger)
             ))?;
         }
 
@@ -328,6 +372,65 @@ VALUES
                 [],
                 |row| row.get(0),
             )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn init_database_preserves_non_fts_clipboard_item_triggers() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("clipboard.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+CREATE TABLE clipboard_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content TEXT,
+  content_type TEXT NOT NULL,
+  content_hash TEXT UNIQUE NOT NULL,
+  preview TEXT NOT NULL,
+  metadata TEXT,
+  file_path TEXT,
+  image_data BLOB,
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  use_count INTEGER DEFAULT 0,
+  is_pinned INTEGER DEFAULT 0,
+  is_favorite INTEGER DEFAULT 0
+);
+CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER);
+CREATE TABLE app_blacklist (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_name TEXT NOT NULL,
+  app_path TEXT,
+  is_builtin INTEGER DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE clipboard_item_audit (item_id INTEGER);
+CREATE TRIGGER clipboard_items_audit AFTER INSERT ON clipboard_items BEGIN
+  INSERT INTO clipboard_item_audit(item_id) VALUES (new.id);
+END;
+"#,
+        )
+        .unwrap();
+        drop(conn);
+
+        init_database(&db_path).unwrap();
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(object_exists(&conn, "clipboard_items_audit", "trigger"));
+        conn.execute(
+            "INSERT INTO clipboard_items
+             (content, content_type, content_hash, preview, metadata, created_at)
+             VALUES ('audit', 'text', 'hash-audit', 'audit', '{}', 1)",
+            [],
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clipboard_item_audit", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 1);
     }
