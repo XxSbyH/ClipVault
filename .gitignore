@@ -9,6 +9,8 @@ screenshoot/
 node_modules
 dist
 dist-electron
+src-tauri/target
+src-tauri/gen
 out
 .pnpm-store
 *.log
