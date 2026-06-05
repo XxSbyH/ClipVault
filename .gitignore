@@ -3,7 +3,9 @@
 .worktrees/
 .git/
 AGENTS.md
-docs/
+docs/*
+!docs/superpowers/
+!docs/superpowers/**
 screenshoot/
 
 node_modules

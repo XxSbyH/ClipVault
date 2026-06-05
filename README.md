@@ -1,135 +1,111 @@
 # ClipVault
 
-ClipVault 是一个基于 Electron + React + TypeScript 的 Windows 智能剪贴板管理器。  
-它将系统单条剪贴板扩展为可持久化、可搜索、可分类的历史面板，并支持全局快捷键快速粘贴。
+ClipVault 是一个面向 Windows 的本地优先剪贴板管理器。它将系统单槽剪贴板扩展为可搜索、可分类、可快速粘贴的历史面板，并默认启用敏感内容过滤。
 
-## 功能简介
+本项目已从 Electron 完整迁移到 Tauri 2：前端继续使用 React 18、TypeScript、Vite、Tailwind 和 Zustand，桌面集成、剪贴板监听、SQLite、全局快捷键、托盘、HUD 与粘贴模拟由 Rust/Tauri 后端负责。
 
-- 剪贴板历史记录（文本、图片、URL、代码等）
-- 全局快捷键呼出面板与快速粘贴
-- 收藏/置顶/删除管理
-- 本地 SQLite 存储与全文搜索
-- 系统托盘运行（暂停/恢复监听）
-- 设置面板（保留策略、隐私、存储、快捷键）
+## 核心功能
+
+- 剪贴板历史：文本、图片、文件路径、URL、代码、颜色、邮箱。
+- 快速访问：`Ctrl+Shift+V` 打开主面板，`Ctrl+Shift+F` 聚焦搜索。
+- 快速粘贴：`Ctrl+Alt+Left/Right` 在历史项之间切换并粘贴。
+- 管理能力：搜索、删除、清空、置顶、收藏、类型筛选。
+- 桌面集成：系统托盘、暂停/恢复监听、轻量 HUD 反馈、单实例聚焦。
+- 隐私保护：本地 SQLite 存储、默认敏感内容过滤、应用黑名单、文件只保存路径和元数据。
 
 ## 技术栈
 
-- Electron
+- Tauri 2 + Rust 2021
 - React 18 + TypeScript
-- Vite（electron-vite）
+- Vite + Tailwind CSS
 - Zustand
-- better-sqlite3
-- MiniSearch
-- sharp
-- uiohook-napi
+- react-window
+- rusqlite + SQLite FTS5
+- Vitest + Testing Library
 
 ## 环境要求
 
-- Windows 10/11（x64）
-- Node.js 20+（建议 LTS）
+- Windows 10/11 x64
+- Microsoft Edge WebView2 Runtime
+- Rust stable + MSVC 构建工具
+- Node.js 20+
 - pnpm 9+
 
-> 本项目含原生依赖（`better-sqlite3`、`sharp`、`uiohook-napi`），请确保本机网络与构建环境正常。
+首次安装依赖：
 
-## 快速开始（开发）
-
-```bash
+```powershell
 pnpm install
-pnpm run dev
 ```
 
-启动后会打开 Electron 应用窗口。
+## 开发
 
-## 常用命令
+启动完整 Tauri 开发环境：
 
-```bash
-# 类型检查
-pnpm run typecheck
-
-# 生产打包（安装包）
-pnpm run build
-
-# 生产打包（目录版，不生成安装向导）
-pnpm run build:dir
-
-# 预览（构建后）
-pnpm run preview
+```powershell
+pnpm tauri:dev
 ```
 
-## 打包产物说明
+只启动 Vite 前端开发服务器：
 
-### 1) 目录版（推荐联调）
-
-执行：
-
-```bash
-pnpm run build:dir
+```powershell
+pnpm dev
 ```
 
-输出目录：
+`pnpm dev` 不会启动桌面端能力，只适合前端静态调试。
 
-- `dist/win-unpacked/ClipVault.exe`
+## 验证
 
-适合直接运行验证，不经过安装流程。
-
-### 2) 安装包版（推荐发布）
-
-执行：
-
-```bash
-pnpm run build
+```powershell
+pnpm typecheck
+pnpm test
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 ```
 
-输出目录：
+## 构建
 
-- `dist/`（包含 NSIS 安装包）
+生产构建命令：
 
-安装后可通过开始菜单/桌面快捷方式启动。
-
-## 部署教程（生产环境）
-
-### 方式 A：分发安装包（推荐）
-
-1. 在构建机执行 `pnpm run build`
-2. 将 `dist` 内生成的安装包分发到目标机器
-3. 目标机器双击安装并启动
-
-### 方式 B：分发目录版（免安装）
-
-1. 在构建机执行 `pnpm run build:dir`
-2. 打包并分发 `dist/win-unpacked` 整个目录
-3. 在目标机器运行 `ClipVault.exe`
-
-## 图标与资源
-
-- 应用图标：`resources/icon.ico`
-- 托盘图标：
-  - `resources/tray-icon.png`
-  - `resources/tray-icon@2x.png`
-  - `resources/tray-icon-paused.png`
-  - `resources/tray-icon-paused@2x.png`
-
-`electron-builder.yml` 已配置统一使用 `resources/icon.ico` 作为 Windows 应用图标。
-
-## 数据与日志位置（Windows）
-
-- 数据库：`%APPDATA%/clipvault/clipboard.db`
-- 日志：`%APPDATA%/clipvault/logs/`
-
-## 常见问题
-
-### 1) 打包失败：`Access is denied`（win-unpacked 文件被占用）
-
-原因：`ClipVault.exe` 正在运行，导致覆盖失败。  
-处理：先关闭应用进程，再重新执行打包命令。
-
-### 2) 原生模块相关错误（sharp / better-sqlite3 / uiohook-napi）
-
-先执行：
-
-```bash
-pnpm install --force
-pnpm run build:dir
+```powershell
+pnpm build
 ```
 
-仍有问题时，确认 Node 版本与系统架构（x64）一致。
+`pnpm build` 等价于 `tauri build`，会先构建 `dist/renderer`，再生成 Windows NSIS 安装包。
+
+主要产物：
+
+- 前端静态资源：`dist/renderer/`
+- Release 可执行文件：`src-tauri/target/release/clipvault.exe`
+- NSIS 安装包：`src-tauri/target/release/bundle/nsis/ClipVault_0.1.0_x64-setup.exe`
+
+当前配置启用 `bundle.useLocalToolsDir`，Tauri 会优先使用项目 target 下的本地工具目录缓存 NSIS/Wix 等打包工具。若构建机要求工具下载落到固定磁盘，可将 `src-tauri/target/.tauri` 建成指向目标目录的 junction，例如：
+
+```powershell
+New-Item -ItemType Directory -Force -Path D:\rj\tauri-tools
+New-Item -ItemType Directory -Force -Path src-tauri\target
+New-Item -ItemType Junction -Path src-tauri\target\.tauri -Target D:\rj\tauri-tools
+```
+
+## 数据与隐私
+
+- 数据库位置：Tauri `app_data_dir()` 下的 `clipboard.db`。
+- 默认保留：普通历史按设置清理，收藏项长期保留。
+- 默认过滤：信用卡号、SSN、中国身份证、密码字段、长令牌等敏感内容不会入库。
+- 黑名单：可配置应用名或路径，匹配时跳过记录。
+- 文件处理：只记录路径和元数据，不复制文件内容。
+- 云同步：不实现，数据默认保留在本机。
+
+## 常用快捷键
+
+- `Ctrl+Shift+V`：打开主面板。
+- `Ctrl+Shift+F`：打开主面板并聚焦搜索。
+- `Ctrl+Shift+P`：暂停或恢复监听。
+- `Ctrl+Shift+C`：清空历史。
+- `Ctrl+Alt+Left`：快速粘贴上一项。
+- `Ctrl+Alt+Right`：快速粘贴下一项。
+- 面板内 `ArrowUp/ArrowDown`：移动选择。
+- 面板内 `Enter`：粘贴当前项。
+- 面板内 `Delete`：删除当前项。
+- 面板内 `Ctrl+D`：切换收藏。
+- 面板内 `Esc`：隐藏窗口。
