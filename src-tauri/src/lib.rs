@@ -1,3 +1,8 @@
+pub mod detector;
+pub mod errors;
+pub mod models;
+pub mod privacy;
+
 #[tauri::command]
 fn health_check() -> &'static str {
     "ok"
