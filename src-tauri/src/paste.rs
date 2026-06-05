@@ -77,14 +77,14 @@ fn simulate_ctrl_v_after_delay(_delay: Duration) -> AppResult<()> {
 
 #[cfg(target_os = "windows")]
 fn send_ctrl_v() -> AppResult<()> {
-    let mut inputs = [
+    let inputs = [
         keyboard_input(VK_CONTROL, false),
         keyboard_input(VK_V, false),
         keyboard_input(VK_V, true),
         keyboard_input(VK_CONTROL, true),
     ];
 
-    let sent = unsafe { SendInput(&mut inputs, std::mem::size_of::<INPUT>() as i32) };
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
     if sent == inputs.len() as u32 {
         Ok(())
     } else {

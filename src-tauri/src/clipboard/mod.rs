@@ -22,7 +22,7 @@ const BLACKLIST_CHECK_INTERVAL_MS: i64 = 3000;
 #[derive(Debug, Clone, PartialEq)]
 pub enum CaptureDecision {
     Insert {
-        input: ClipboardInsertInput,
+        input: Box<ClipboardInsertInput>,
         hash: String,
     },
     Skip(CaptureSkipReason),
@@ -106,7 +106,7 @@ pub fn build_text_insert_input(
     }
 
     CaptureDecision::Insert {
-        input: ClipboardInsertInput {
+        input: Box::new(ClipboardInsertInput {
             content: Some(text.to_string()),
             content_type,
             content_hash: hash.clone(),
@@ -114,7 +114,7 @@ pub fn build_text_insert_input(
             metadata: Some(metadata),
             file_path,
             image_data: None,
-        },
+        }),
         hash,
     }
 }
@@ -133,7 +133,7 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
             settings.enable_sensitive_filter,
             monitor.last_hash(),
         ) {
-            insert_and_emit(app, state, input, hash, monitor)?;
+            insert_and_emit(app, state, *input, hash, monitor)?;
             return Ok(());
         }
     }
@@ -155,14 +155,16 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
 
     let processed = image::process_image_bytes(&png, settings.image_compression)?;
     let filename = image_filename(now);
-    let mut metadata = ClipboardMetadata::default();
-    metadata.file_name = Some(filename.clone());
-    metadata.file_ext = Some(".jpg".to_string());
-    metadata.file_size = Some(processed.compressed_size);
-    metadata.original_size = Some(processed.original_size);
-    metadata.compressed_size = Some(processed.compressed_size);
-    metadata.image_width = Some(processed.width);
-    metadata.image_height = Some(processed.height);
+    let mut metadata = ClipboardMetadata {
+        file_name: Some(filename.clone()),
+        file_ext: Some(".jpg".to_string()),
+        file_size: Some(processed.compressed_size),
+        original_size: Some(processed.original_size),
+        compressed_size: Some(processed.compressed_size),
+        image_width: Some(processed.width),
+        image_height: Some(processed.height),
+        ..Default::default()
+    };
     metadata
         .extra
         .insert("mimeType".to_string(), json!(processed.mime_type));
@@ -221,20 +223,20 @@ fn insert_and_emit(
 }
 
 fn file_metadata(path: &Path) -> ClipboardMetadata {
-    let mut metadata = ClipboardMetadata::default();
-    metadata.exists = Some(path.exists());
-    metadata.file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string);
-    metadata.file_ext = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| format!(".{ext}"));
-    if let Ok(stat) = fs::metadata(path) {
-        metadata.file_size = Some(stat.len());
+    let file_size = fs::metadata(path).ok().map(|stat| stat.len());
+    ClipboardMetadata {
+        exists: Some(path.exists()),
+        file_name: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string),
+        file_ext: path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!(".{ext}")),
+        file_size,
+        ..Default::default()
     }
-    metadata
 }
 
 fn image_filename(timestamp_ms: i64) -> String {

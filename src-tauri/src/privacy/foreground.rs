@@ -42,7 +42,7 @@ pub fn foreground_app() -> Option<ForegroundApp> {
 
     unsafe {
         let hwnd = GetForegroundWindow();
-        if hwnd.0 == std::ptr::null_mut() {
+        if hwnd.0.is_null() {
             return None;
         }
 

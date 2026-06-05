@@ -486,10 +486,11 @@ mod wheel {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        if code == HC_ACTION as i32 && wparam.0 as u32 == WM_MOUSEWHEEL {
-            if handle_mouse_wheel(lparam) {
-                return LRESULT(1);
-            }
+        if code == HC_ACTION as i32
+            && wparam.0 as u32 == WM_MOUSEWHEEL
+            && handle_mouse_wheel(lparam)
+        {
+            return LRESULT(1);
         }
         CallNextHookEx(HHOOK::default(), code, wparam, lparam)
     }
