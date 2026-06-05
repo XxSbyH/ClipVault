@@ -82,9 +82,8 @@ pub fn parse_single_file_path(content: &str) -> Option<PathBuf> {
 }
 
 fn is_url_text(text: &str) -> bool {
-    let rest = text
-        .strip_prefix("https://")
-        .or_else(|| text.strip_prefix("http://"));
+    let rest = strip_ascii_case_prefix(text, "https://")
+        .or_else(|| strip_ascii_case_prefix(text, "http://"));
     let Some(rest) = rest else {
         return false;
     };
@@ -95,6 +94,14 @@ fn is_url_text(text: &str) -> bool {
 
     let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
     !host.is_empty()
+}
+
+fn strip_ascii_case_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    if text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        Some(&text[prefix.len()..])
+    } else {
+        None
+    }
 }
 
 fn strip_matching_quotes(input: &str) -> &str {
@@ -150,7 +157,7 @@ fn code_regex() -> &'static Regex {
     static CODE_REGEX: OnceLock<Regex> = OnceLock::new();
     CODE_REGEX.get_or_init(|| {
         Regex::new(
-            r#"(?m)\b(import\s+.+\s+from\s+['"][^'"]+['"];?|function\s+\w+\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|class\s+\w+|<[a-zA-Z][^>]*>)"#,
+            r#"(?mi)\b(import\s+.+\s+from\s+['"][^'"]+['"];?|function\s+\w+\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|class\s+\w+|SELECT\s+.+\s+FROM)|=>\s*\{|<[a-zA-Z][^>]*>"#,
         )
         .expect("valid code regex")
     })
@@ -164,6 +171,14 @@ mod tests {
     fn detects_url_content() {
         assert_eq!(
             detect_content_type("https://github.com/xxsby/ClipVault"),
+            ClipboardContentType::Url
+        );
+    }
+
+    #[test]
+    fn detects_uppercase_scheme_url_content() {
+        assert_eq!(
+            detect_content_type("HTTPS://github.com/xxsby/ClipVault"),
             ClipboardContentType::Url
         );
     }
@@ -194,6 +209,22 @@ mod tests {
     fn detects_code_content() {
         assert_eq!(
             detect_content_type("import React from 'react'"),
+            ClipboardContentType::Code
+        );
+    }
+
+    #[test]
+    fn detects_arrow_function_block_as_code() {
+        assert_eq!(
+            detect_content_type("const run = () => {}"),
+            ClipboardContentType::Code
+        );
+    }
+
+    #[test]
+    fn detects_sql_select_from_as_code() {
+        assert_eq!(
+            detect_content_type("SELECT id FROM clipboard_items"),
             ClipboardContentType::Code
         );
     }

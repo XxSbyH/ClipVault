@@ -16,14 +16,16 @@ fn sensitive_regex() -> &'static Regex {
     static SENSITIVE_REGEX: OnceLock<Regex> = OnceLock::new();
     SENSITIVE_REGEX.get_or_init(|| {
         Regex::new(
-            r"(?ix)
+            r"(?x)
             \b\d{3}-\d{2}-\d{4}\b
             |
-            \b\d{17}[\dx]\b
+            \b\d{17}[\dXx]\b
             |
             \bAKIA[0-9A-Z]{16}\b
             |
-            \b(?:password|passwd|pwd)\s*[:=]\s*\S+
+            \b[A-Z0-9]{20,}\b
+            |
+            \b(?i:password|passwd|pwd)\s*[:=]\s*\S+
             ",
         )
         .expect("valid sensitive content regex")
@@ -98,6 +100,12 @@ mod tests {
     #[test]
     fn detects_aws_access_key_like_token() {
         assert!(is_sensitive_content("AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn detects_generic_uppercase_alphanumeric_token() {
+        assert!(is_sensitive_content("ABCDEF1234567890GHIJ"));
+        assert!(is_sensitive_content("ABCDEFGHIJKLMNOPQRST"));
     }
 
     #[test]
