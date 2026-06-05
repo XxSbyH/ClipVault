@@ -55,7 +55,21 @@ pub fn create_preview(content: &str, max_len: usize) -> String {
 }
 
 pub fn is_file_path_text(content: &str) -> bool {
-    parse_single_file_path(content).is_some()
+    let mut has_path = false;
+
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if parse_windows_or_unc_file_path(line).is_none() {
+            return false;
+        }
+
+        has_path = true;
+    }
+
+    has_path
 }
 
 pub fn parse_single_file_path(content: &str) -> Option<PathBuf> {
@@ -71,10 +85,17 @@ pub fn parse_single_file_path(content: &str) -> Option<PathBuf> {
         return None;
     }
 
-    if looks_like_windows_absolute_path(path)
-        || looks_like_unc_path(path)
-        || looks_like_posix_path(path)
-    {
+    parse_windows_or_unc_file_path(path)
+}
+
+fn parse_windows_or_unc_file_path(content: &str) -> Option<PathBuf> {
+    let path = strip_matching_quotes(content).trim();
+
+    if path.is_empty() || path.chars().any(|ch| ch.is_control()) {
+        return None;
+    }
+
+    if looks_like_windows_absolute_path(path) || looks_like_unc_path(path) {
         Some(PathBuf::from(path))
     } else {
         None
@@ -138,10 +159,6 @@ fn looks_like_unc_path(path: &str) -> bool {
         .split(['\\', '/'])
         .filter(|segment| !segment.is_empty());
     segments.next().is_some() && segments.next().is_some()
-}
-
-fn looks_like_posix_path(path: &str) -> bool {
-    path.starts_with('/') && path.len() > 1
 }
 
 fn color_regex() -> &'static Regex {
@@ -214,6 +231,49 @@ mod tests {
         assert!(is_file_path_text(path));
         assert_eq!(detect_content_type(path), ClipboardContentType::File);
         assert_eq!(parse_single_file_path(path), Some(PathBuf::from(path)));
+    }
+
+    #[test]
+    fn detects_multiline_windows_file_paths() {
+        let paths = "D:\\tmp\\a.txt\nD:\\tmp\\b.txt";
+
+        assert!(is_file_path_text(paths));
+        assert_eq!(detect_content_type(paths), ClipboardContentType::File);
+        assert_eq!(parse_single_file_path(paths), None);
+    }
+
+    #[test]
+    fn detects_multiline_unc_file_paths() {
+        let paths = "\\\\server\\share\\a.txt\n\\\\server\\share\\b.txt";
+
+        assert!(is_file_path_text(paths));
+        assert_eq!(detect_content_type(paths), ClipboardContentType::File);
+        assert_eq!(parse_single_file_path(paths), None);
+    }
+
+    #[test]
+    fn parses_only_single_windows_or_unc_file_paths() {
+        let windows_path = r"D:\tmp\a.txt";
+        let unc_path = r"\\server\share\a.txt";
+
+        assert_eq!(
+            parse_single_file_path(windows_path),
+            Some(PathBuf::from(windows_path))
+        );
+        assert_eq!(
+            parse_single_file_path(unc_path),
+            Some(PathBuf::from(unc_path))
+        );
+        assert_eq!(parse_single_file_path("/api/users"), None);
+    }
+
+    #[test]
+    fn treats_posix_like_api_path_as_text() {
+        assert!(!is_file_path_text("/api/users"));
+        assert_eq!(
+            detect_content_type("/api/users"),
+            ClipboardContentType::Text
+        );
     }
 
     #[test]

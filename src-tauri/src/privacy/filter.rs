@@ -17,15 +17,15 @@ fn sensitive_regex() -> &'static Regex {
     SENSITIVE_REGEX.get_or_init(|| {
         Regex::new(
             r"(?x)
-            \b\d{3}-\d{2}-\d{4}\b
+            (?-u:\b)\d{3}-\d{2}-\d{4}(?-u:\b)
             |
-            \b\d{17}[\dXx]\b
+            (?-u:\b)\d{17}[\dXx](?-u:\b)
             |
-            \bAKIA[0-9A-Z]{16}\b
+            (?-u:\b)AKIA[0-9A-Z]{16}(?-u:\b)
             |
-            \b[A-Z0-9]{20,}\b
+            (?-u:\b)[A-Z0-9]{20,}(?-u:\b)
             |
-            \b(?i:password|passwd|pwd)\s*[:=]\s*\S+
+            (?-u:\b)(?i:password|passwd|pwd)\s*[:=]\s*\S+
             ",
         )
         .expect("valid sensitive content regex")
@@ -46,8 +46,9 @@ fn contains_credit_card_number(text: &str) -> bool {
 
 fn card_candidate_regex() -> &'static Regex {
     static CARD_CANDIDATE_REGEX: OnceLock<Regex> = OnceLock::new();
-    CARD_CANDIDATE_REGEX
-        .get_or_init(|| Regex::new(r"\b(?:\d[ -]?){13,19}\b").expect("valid card regex"))
+    CARD_CANDIDATE_REGEX.get_or_init(|| {
+        Regex::new(r"(?-u:\b)(?:\d[ -]?){13,19}(?-u:\b)").expect("valid card regex")
+    })
 }
 
 fn passes_luhn(digits: &str) -> bool {
@@ -106,6 +107,13 @@ mod tests {
     fn detects_generic_uppercase_alphanumeric_token() {
         assert!(is_sensitive_content("ABCDEF1234567890GHIJ"));
         assert!(is_sensitive_content("ABCDEFGHIJKLMNOPQRST"));
+    }
+
+    #[test]
+    fn detects_sensitive_values_attached_to_chinese_context() {
+        assert!(is_sensitive_content("卡号4111111111111111"));
+        assert!(is_sensitive_content("身份证11010519491231002X"));
+        assert!(is_sensitive_content("令牌ABCDEF1234567890GHIJ"));
     }
 
     #[test]
