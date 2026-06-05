@@ -1,5 +1,12 @@
 @echo off
+if /I not "%~1"=="--inner" (
+  start "ClipVault Dev" cmd /k ""%~f0" --inner %*"
+  exit /b 0
+)
+
+shift
 setlocal EnableExtensions
+title ClipVault Dev
 
 cd /d "%~dp0"
 
