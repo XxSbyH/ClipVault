@@ -157,6 +157,36 @@ impl Default for HotkeySettings {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeySettingsPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_panel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clear: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quick_paste_prev: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quick_paste_next: Option<String>,
+}
+
+impl From<&HotkeySettings> for HotkeySettingsPatch {
+    fn from(value: &HotkeySettings) -> Self {
+        Self {
+            open_panel: Some(value.open_panel.clone()),
+            search: Some(value.search.clone()),
+            pause: Some(value.pause.clone()),
+            clear: Some(value.clear.clone()),
+            quick_paste_prev: Some(value.quick_paste_prev.clone()),
+            quick_paste_next: Some(value.quick_paste_next.clone()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlacklistApp {

@@ -14,10 +14,62 @@ pub fn init_database(path: impl AsRef<Path>) -> AppResult<()> {
 }
 
 fn rebuild_fts(conn: &Connection) -> AppResult<()> {
-    conn.execute(
-        "INSERT INTO clipboard_fts(clipboard_fts) VALUES('rebuild')",
-        [],
-    )?;
+    let triggers = {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'trigger' AND name LIKE 'clipboard_items_%'",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> AppResult<()> {
+        for trigger in triggers {
+            let escaped = trigger.replace('"', "\"\"");
+            conn.execute_batch(&format!("DROP TRIGGER IF EXISTS \"{escaped}\";"))?;
+        }
+
+        conn.execute_batch(
+            r#"
+DROP TABLE IF EXISTS clipboard_fts;
+
+CREATE VIRTUAL TABLE clipboard_fts USING fts5(
+  content,
+  preview,
+  tokenize='unicode61'
+);
+
+CREATE TRIGGER clipboard_items_ai AFTER INSERT ON clipboard_items BEGIN
+  INSERT INTO clipboard_fts(rowid, content, preview)
+  VALUES (new.id, COALESCE(new.content, ''), COALESCE(new.preview, ''));
+END;
+
+CREATE TRIGGER clipboard_items_ad AFTER DELETE ON clipboard_items BEGIN
+  DELETE FROM clipboard_fts WHERE rowid = old.id;
+END;
+
+CREATE TRIGGER clipboard_items_au AFTER UPDATE ON clipboard_items BEGIN
+  DELETE FROM clipboard_fts WHERE rowid = old.id;
+  INSERT INTO clipboard_fts(rowid, content, preview)
+  VALUES (new.id, COALESCE(new.content, ''), COALESCE(new.preview, ''));
+END;
+
+INSERT INTO clipboard_fts(rowid, content, preview)
+SELECT id, COALESCE(content, ''), COALESCE(preview, '')
+FROM clipboard_items;
+"#,
+        )?;
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT")?,
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+    }
     Ok(())
 }
 
@@ -104,6 +156,7 @@ mod tests {
             "idx_content_type",
             "idx_is_pinned",
             "idx_is_favorite",
+            "idx_blacklist_unique",
         ] {
             assert!(
                 object_exists(&conn, index, "index"),
@@ -142,5 +195,55 @@ mod tests {
                 "missing trigger {trigger}"
             );
         }
+    }
+
+    #[test]
+    fn init_database_repairs_stale_fts_artifacts_and_backfills_rows() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("clipboard.db");
+        init_database(&db_path).unwrap();
+
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO clipboard_items
+             (content, content_type, content_hash, preview, metadata, created_at)
+             VALUES ('needle content', 'text', 'hash-needle', 'needle preview', '{}', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            r#"
+DROP TRIGGER IF EXISTS clipboard_items_ai;
+DROP TRIGGER IF EXISTS clipboard_items_ad;
+DROP TRIGGER IF EXISTS clipboard_items_au;
+DROP TABLE IF EXISTS clipboard_fts;
+CREATE VIRTUAL TABLE clipboard_fts USING fts5(content);
+"#,
+        )
+        .unwrap();
+        drop(conn);
+
+        init_database(&db_path).unwrap();
+
+        let conn = Connection::open(&db_path).unwrap();
+        for trigger in [
+            "clipboard_items_ai",
+            "clipboard_items_ad",
+            "clipboard_items_au",
+        ] {
+            assert!(
+                object_exists(&conn, trigger, "trigger"),
+                "missing repaired trigger {trigger}"
+            );
+        }
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_fts WHERE clipboard_fts MATCH 'needle'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
