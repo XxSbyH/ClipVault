@@ -2,6 +2,7 @@
 .superpowers/
 .worktrees/
 .git/
+AGENTS.md
 docs/*
 !docs/superpowers/
 !docs/superpowers/**
