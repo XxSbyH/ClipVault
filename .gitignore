@@ -1,4 +1,6 @@
 .codex/
+.superpowers/
+.worktrees/
 .git/
 AGENTS.md
 docs/
