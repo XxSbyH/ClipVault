@@ -1,0 +1,7 @@
+pub const CLIPBOARD_NEW_ITEM: &str = "clipboard:new-item";
+pub const CLIPBOARD_FOCUS_SEARCH: &str = "clipboard:focus-search";
+pub const CLIPBOARD_OPEN_SETTINGS: &str = "clipboard:open-settings";
+pub const CLIPBOARD_OPEN_HOTKEYS: &str = "clipboard:open-hotkeys";
+pub const HUD_SHOW: &str = "hud:show";
+pub const HISTORY_REVISION: &str = "history:revision";
+pub const MONITORING_CHANGED: &str = "monitoring:changed";
