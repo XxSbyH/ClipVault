@@ -13,6 +13,8 @@ pub enum AppError {
     Json(#[from] serde_json::Error),
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("Tauri error: {0}")]
+    Tauri(String),
 }
 
 impl From<String> for AppError {
@@ -24,6 +26,12 @@ impl From<String> for AppError {
 impl From<&str> for AppError {
     fn from(value: &str) -> Self {
         Self::Message(value.to_string())
+    }
+}
+
+impl From<tauri::Error> for AppError {
+    fn from(value: tauri::Error) -> Self {
+        Self::Tauri(value.to_string())
     }
 }
 

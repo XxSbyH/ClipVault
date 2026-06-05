@@ -10,50 +10,50 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State, Window};
+use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_global_shortcut::GlobalShortcutExt as _;
 
 use crate::{
     database::repository::Repository,
     errors::{AppError, AppResult},
     events,
+    hotkeys::{self, QuickPasteCursor, QuickPasteCursorSnapshot},
     models::{
         AppSettings, BlacklistApp, ClipboardContentType, ClipboardItem, HotkeySettings,
         HotkeySettingsPatch, HudDirection, HudPayload, MonitoringStatus,
     },
-    settings,
+    paste, settings, windows,
 };
 
 const DEFAULT_HISTORY_LIMIT: i64 = 1000;
-
-#[derive(Debug, Clone, Default)]
-pub struct QuickPasteCursorState {
-    pub offset: Option<i64>,
-    pub last_item_id: Option<i64>,
-}
 
 #[derive(Debug)]
 struct MonitoringRuntimeState {
     monitor_enabled: bool,
     monitor_started: bool,
     has_timer: bool,
+    is_running: bool,
     last_hash_prefix: String,
 }
 
 impl Default for MonitoringRuntimeState {
     fn default() -> Self {
         Self {
-            monitor_enabled: false,
+            monitor_enabled: true,
             monitor_started: false,
             has_timer: false,
+            is_running: false,
             last_hash_prefix: String::new(),
         }
     }
 }
 
+#[derive(Clone)]
 pub struct AppState {
     repository: Arc<Repository>,
     monitoring: Arc<Mutex<MonitoringRuntimeState>>,
     history_revision: Arc<AtomicU64>,
-    quick_paste_cursor: Arc<Mutex<QuickPasteCursorState>>,
+    quick_paste_cursor: Arc<Mutex<QuickPasteCursor>>,
 }
 
 impl AppState {
@@ -62,7 +62,7 @@ impl AppState {
             repository: Arc::new(repository),
             monitoring: Arc::new(Mutex::new(MonitoringRuntimeState::default())),
             history_revision: Arc::new(AtomicU64::new(0)),
-            quick_paste_cursor: Arc::new(Mutex::new(QuickPasteCursorState::default())),
+            quick_paste_cursor: Arc::new(Mutex::new(QuickPasteCursor::default())),
         }
     }
 
@@ -74,14 +74,60 @@ impl AppState {
         self.history_revision.load(Ordering::SeqCst)
     }
 
-    pub fn quick_paste_cursor(&self) -> QuickPasteCursorState {
+    pub fn quick_paste_cursor(&self) -> QuickPasteCursorSnapshot {
         self.quick_paste_cursor
             .lock()
             .expect("quick paste cursor lock poisoned")
-            .clone()
+            .snapshot()
     }
 
-    fn bump_history_revision(&self) -> u64 {
+    pub fn quick_paste_cursor_mut<T>(&self, f: impl FnOnce(&mut QuickPasteCursor) -> T) -> T {
+        let mut cursor = self
+            .quick_paste_cursor
+            .lock()
+            .expect("quick paste cursor lock poisoned");
+        f(&mut cursor)
+    }
+
+    pub fn monitoring_enabled(&self) -> bool {
+        self.monitoring
+            .lock()
+            .expect("monitoring state lock poisoned")
+            .monitor_enabled
+    }
+
+    pub fn set_monitoring_service_started(&self, started: bool) -> MonitoringStatus {
+        let mut monitoring = self
+            .monitoring
+            .lock()
+            .expect("monitoring state lock poisoned");
+        monitoring.monitor_started = started;
+        monitoring.has_timer = started;
+        if !started {
+            monitoring.is_running = false;
+        }
+        monitoring_status(&monitoring)
+    }
+
+    pub fn set_monitoring_running(&self, running: bool) -> MonitoringStatus {
+        let mut monitoring = self
+            .monitoring
+            .lock()
+            .expect("monitoring state lock poisoned");
+        monitoring.is_running = running;
+        monitoring_status(&monitoring)
+    }
+
+    pub fn set_monitoring_last_hash(&self, hash: &str) -> MonitoringStatus {
+        let mut monitoring = self
+            .monitoring
+            .lock()
+            .expect("monitoring state lock poisoned");
+        monitoring.last_hash_prefix = hash.chars().take(12).collect();
+        monitoring_status(&monitoring)
+    }
+
+    pub fn bump_history_revision(&self) -> u64 {
         self.history_revision.fetch_add(1, Ordering::SeqCst) + 1
     }
 }
@@ -153,8 +199,11 @@ pub fn search_items_impl(
     }
 }
 
-pub fn paste_item_impl(state: &AppState, id: i64) -> AppResult<PasteResult> {
-    let Some(_) = state.repository().get_item_by_id(id)? else {
+pub fn paste_item_impl<F>(state: &AppState, id: i64, paste: F) -> AppResult<PasteResult>
+where
+    F: FnOnce(&ClipboardItem) -> AppResult<()>,
+{
+    let Some(item) = state.repository().get_item_by_id(id)? else {
         return Ok(PasteResult {
             success: false,
             item: None,
@@ -163,11 +212,22 @@ pub fn paste_item_impl(state: &AppState, id: i64) -> AppResult<PasteResult> {
         });
     };
 
+    if let Err(error) = paste(&item) {
+        return Ok(PasteResult {
+            success: false,
+            item: Some(item),
+            revision: state.history_revision(),
+            message: error.to_string(),
+        });
+    }
+
+    let item = state.repository().increment_use_stats(id)?;
+    let revision = state.bump_history_revision();
     Ok(PasteResult {
-        success: false,
-        item: None,
-        revision: state.history_revision(),
-        message: "paste is not implemented in Task 4".to_string(),
+        success: true,
+        item: Some(item),
+        revision,
+        message: "pasted".to_string(),
     })
 }
 
@@ -264,8 +324,9 @@ pub fn toggle_monitoring_impl(state: &AppState) -> MonitoringStatus {
         .lock()
         .expect("monitoring state lock poisoned");
     monitoring.monitor_enabled = !monitoring.monitor_enabled;
-    monitoring.monitor_started = monitoring.monitor_enabled;
-    monitoring.has_timer = monitoring.monitor_enabled;
+    if !monitoring.monitor_enabled {
+        monitoring.is_running = false;
+    }
     monitoring_status(&monitoring)
 }
 
@@ -319,6 +380,18 @@ pub fn check_hotkey_available_impl(hotkey: String) -> HotkeyAvailability {
     }
 }
 
+pub fn check_hotkey_available_with_system_impl(
+    app: &AppHandle,
+    hotkey: String,
+) -> HotkeyAvailability {
+    let probe = hotkeys::check_system_hotkey_available(app, &hotkey);
+    HotkeyAvailability {
+        hotkey: probe.hotkey,
+        available: probe.available,
+        reason: probe.reason,
+    }
+}
+
 pub fn test_hud_impl() -> HudPayload {
     HudPayload {
         direction: HudDirection::Next,
@@ -350,8 +423,13 @@ pub fn search_items(
 }
 
 #[tauri::command]
-pub fn paste_item(_app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<PasteResult> {
-    let result = paste_item_impl(state.inner(), id)?;
+pub fn paste_item(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<PasteResult> {
+    let result = paste_item_impl(state.inner(), id, |item| {
+        paste::write_clipboard_and_paste(&app, item)
+    })?;
+    if result.success {
+        emit_history_revision(&app, result.revision);
+    }
     Ok(result)
 }
 
@@ -398,7 +476,11 @@ pub fn update_setting(
     value: Value,
 ) -> AppResult<AppSettings> {
     let before_revision = state.history_revision();
+    let should_apply_autostart = key == "launchOnStartup";
     let settings = update_setting_impl(state.inner(), key, value)?;
+    if should_apply_autostart {
+        apply_setting_side_effect(&app, &settings)?;
+    }
     let after_revision = state.history_revision();
     if after_revision != before_revision {
         emit_history_revision(&app, after_revision);
@@ -436,16 +518,22 @@ pub fn check_hotkey_conflicts(patch: HotkeySettingsPatch) -> HotkeyConflictRepor
 }
 
 #[tauri::command]
-pub fn check_hotkey_available(hotkey: String) -> HotkeyAvailability {
-    check_hotkey_available_impl(hotkey)
+pub fn check_hotkey_available(app: AppHandle, hotkey: String) -> HotkeyAvailability {
+    check_hotkey_available_with_system_impl(&app, hotkey)
 }
 
 #[tauri::command]
 pub fn update_hotkeys(
+    app: AppHandle,
     state: State<'_, AppState>,
     patch: HotkeySettingsPatch,
 ) -> AppResult<HotkeySettings> {
-    update_hotkeys_impl(state.inner(), patch)
+    let hotkeys = update_hotkeys_impl(state.inner(), patch)?;
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|err| AppError::from(format!("failed to unregister hotkeys: {err}")))?;
+    hotkeys::register_global_shortcuts(&app)?;
+    Ok(hotkeys)
 }
 
 #[tauri::command]
@@ -490,6 +578,7 @@ pub fn test_monitoring(state: State<'_, AppState>) -> MonitoringStatus {
 #[tauri::command]
 pub fn test_hud(app: AppHandle) -> HudPayload {
     let payload = test_hud_impl();
+    let _ = windows::show_hud_window(&app);
     let _ = app.emit(events::HUD_SHOW, &payload);
     payload
 }
@@ -501,12 +590,25 @@ fn emit_history_revision(app: &AppHandle, revision: u64) {
     );
 }
 
+fn apply_setting_side_effect(app: &AppHandle, settings: &AppSettings) -> AppResult<()> {
+    if settings.launch_on_startup {
+        app.autolaunch()
+            .enable()
+            .map_err(|err| AppError::from(format!("failed to enable autostart: {err}")))?;
+    } else {
+        app.autolaunch()
+            .disable()
+            .map_err(|err| AppError::from(format!("failed to disable autostart: {err}")))?;
+    }
+    Ok(())
+}
+
 fn monitoring_status(monitoring: &MonitoringRuntimeState) -> MonitoringStatus {
     MonitoringStatus {
         monitor_enabled: monitoring.monitor_enabled,
         monitor_started: monitoring.monitor_started,
         has_timer: monitoring.has_timer,
-        is_running: monitoring.monitor_enabled && monitoring.monitor_started,
+        is_running: monitoring.is_running,
         last_hash_prefix: monitoring.last_hash_prefix.clone(),
     }
 }
@@ -578,6 +680,7 @@ mod tests {
 
     use crate::{
         database::repository::Repository,
+        errors::AppError,
         models::{
             ClipboardContentType, ClipboardInsertInput, ClipboardMetadata, HotkeySettingsPatch,
         },
@@ -682,18 +785,39 @@ mod tests {
     }
 
     #[test]
-    fn commands_paste_item_is_explicit_unsupported_stub() {
+    fn commands_paste_item_updates_use_stats_after_successful_paste() {
         let state = super::AppState::new(repo());
         let item = state
             .repository()
             .insert_clipboard_item(text_input("alpha", "hash-alpha"))
             .unwrap();
 
-        let result = super::paste_item_impl(&state, item.id).unwrap();
+        let result = super::paste_item_impl(&state, item.id, |_| Ok(())).unwrap();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.item.as_ref().map(|item| item.use_count), Some(1));
+        assert_eq!(result.revision, 1);
+        assert_eq!(stored.use_count, 1);
+        assert!(stored.last_used_at.is_some());
+        assert_eq!(state.history_revision(), 1);
+    }
+
+    #[test]
+    fn commands_paste_item_failure_does_not_update_use_stats() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha", "hash-alpha"))
+            .unwrap();
+
+        let result =
+            super::paste_item_impl(&state, item.id, |_| Err(AppError::from("paste failed")))
+                .unwrap();
         let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
 
         assert!(!result.success);
-        assert!(result.message.contains("not implemented"));
+        assert!(result.message.contains("paste failed"));
         assert_eq!(result.revision, 0);
         assert_eq!(stored.use_count, 0);
         assert_eq!(state.history_revision(), 0);
@@ -747,12 +871,35 @@ mod tests {
     fn commands_monitoring_toggle_returns_status() {
         let state = super::AppState::new(repo());
 
-        let enabled = super::toggle_monitoring_impl(&state);
+        let initial = super::test_monitoring_impl(&state);
         let disabled = super::toggle_monitoring_impl(&state);
+        let enabled = super::toggle_monitoring_impl(&state);
 
-        assert!(enabled.monitor_enabled);
-        assert!(enabled.is_running);
+        assert!(initial.monitor_enabled);
+        assert!(!initial.monitor_started);
+        assert!(!initial.has_timer);
+        assert!(!initial.is_running);
         assert!(!disabled.monitor_enabled);
         assert!(!disabled.is_running);
+        assert!(enabled.monitor_enabled);
+        assert!(!enabled.is_running);
+    }
+
+    #[test]
+    fn commands_monitoring_runtime_state_tracks_service_and_tick_status() {
+        let state = super::AppState::new(repo());
+
+        let started = state.set_monitoring_service_started(true);
+        let running = state.set_monitoring_running(true);
+        let hashed = state.set_monitoring_last_hash("0123456789abcdef");
+        let stopped = state.set_monitoring_service_started(false);
+
+        assert!(started.monitor_started);
+        assert!(started.has_timer);
+        assert!(running.is_running);
+        assert_eq!(hashed.last_hash_prefix, "0123456789ab");
+        assert!(!stopped.monitor_started);
+        assert!(!stopped.has_timer);
+        assert!(!stopped.is_running);
     }
 }

@@ -14,8 +14,11 @@
       {
         "label": "main",
         "title": "ClipVault",
-        "width": 980,
-        "height": 720
+        "width": 600,
+        "height": 800,
+        "minWidth": 520,
+        "minHeight": 640,
+        "decorations": false
       },
       {
         "label": "hud",

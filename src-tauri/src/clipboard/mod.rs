@@ -1,0 +1,305 @@
+pub mod image;
+
+use std::{fs, path::Path, time::Duration};
+
+use serde_json::json;
+use tauri::{AppHandle, Emitter};
+use tauri_plugin_clipboard_manager::ClipboardExt;
+
+use crate::{
+    commands::{AppState, HistoryRevisionPayload},
+    detector::{create_preview, detect_content_type, parse_single_file_path},
+    errors::{AppError, AppResult},
+    events,
+    models::{ClipboardInsertInput, ClipboardMetadata},
+    privacy::{filter::is_sensitive_content, foreground::is_blacklisted_foreground_app},
+};
+
+const MONITOR_INTERVAL_MS: u64 = 800;
+const IMAGE_SCAN_INTERVAL_MS: i64 = 1200;
+const BLACKLIST_CHECK_INTERVAL_MS: i64 = 3000;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CaptureDecision {
+    Insert {
+        input: ClipboardInsertInput,
+        hash: String,
+    },
+    Skip(CaptureSkipReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureSkipReason {
+    Empty,
+    Sensitive,
+    TooLarge,
+    Duplicate,
+}
+
+#[derive(Debug, Default)]
+pub struct ClipboardMonitor {
+    last_hash: String,
+    next_image_scan_at: i64,
+    next_blacklist_check_at: i64,
+    last_blacklist_result: bool,
+}
+
+impl ClipboardMonitor {
+    pub fn last_hash(&self) -> &str {
+        &self.last_hash
+    }
+
+    fn remember_hash(&mut self, hash: String) {
+        self.last_hash = hash;
+    }
+}
+
+pub fn start_monitoring(app: AppHandle, state: AppState) {
+    state.set_monitoring_service_started(true);
+    tauri::async_runtime::spawn(async move {
+        let mut monitor = ClipboardMonitor::default();
+        loop {
+            tokio::time::sleep(Duration::from_millis(MONITOR_INTERVAL_MS)).await;
+            if !state.monitoring_enabled() {
+                continue;
+            }
+
+            state.set_monitoring_running(true);
+            if let Err(error) = tick(&app, &state, &mut monitor) {
+                tracing::warn!(target: "clipboard", "clipboard monitor tick failed: {error}");
+            }
+            state.set_monitoring_running(false);
+        }
+    });
+}
+
+pub fn build_text_insert_input(
+    raw_text: &str,
+    text_limit_kb: u32,
+    sensitive_filter_enabled: bool,
+    last_hash: &str,
+) -> CaptureDecision {
+    let text = raw_text.trim();
+    if text.is_empty() {
+        return CaptureDecision::Skip(CaptureSkipReason::Empty);
+    }
+
+    if sensitive_filter_enabled && is_sensitive_content(text) {
+        return CaptureDecision::Skip(CaptureSkipReason::Sensitive);
+    }
+
+    if text.len() > text_limit_kb as usize * 1024 {
+        return CaptureDecision::Skip(CaptureSkipReason::TooLarge);
+    }
+
+    let content_type = detect_content_type(text);
+    let hash = hash_bytes(format!("{content_type:?}:{text}").as_bytes());
+    if hash == last_hash {
+        return CaptureDecision::Skip(CaptureSkipReason::Duplicate);
+    }
+
+    let mut metadata = ClipboardMetadata::default();
+    let mut file_path = None;
+    if let Some(path) = parse_single_file_path(text) {
+        file_path = Some(path.to_string_lossy().to_string());
+        metadata = file_metadata(&path);
+    }
+
+    CaptureDecision::Insert {
+        input: ClipboardInsertInput {
+            content: Some(text.to_string()),
+            content_type,
+            content_hash: hash.clone(),
+            preview: create_preview(text, 200),
+            metadata: Some(metadata),
+            file_path,
+            image_data: None,
+        },
+        hash,
+    }
+}
+
+fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> AppResult<()> {
+    let settings = state.repository().get_settings()?;
+
+    if settings.enable_blacklist && is_blacklisted(app, state, monitor)? {
+        return Ok(());
+    }
+
+    if let Ok(text) = app.clipboard().read_text() {
+        if let CaptureDecision::Insert { input, hash } = build_text_insert_input(
+            &text,
+            settings.text_limit_kb,
+            settings.enable_sensitive_filter,
+            monitor.last_hash(),
+        ) {
+            insert_and_emit(app, state, input, hash, monitor)?;
+            return Ok(());
+        }
+    }
+
+    let now = now_millis();
+    if now < monitor.next_image_scan_at {
+        return Ok(());
+    }
+
+    let Ok(image) = app.clipboard().read_image() else {
+        monitor.next_image_scan_at = now + IMAGE_SCAN_INTERVAL_MS;
+        return Ok(());
+    };
+    let png = image::encode_rgba_png(image.rgba(), image.width(), image.height())?;
+    let hash = hash_bytes(&png);
+    if hash == monitor.last_hash() {
+        return Ok(());
+    }
+
+    let processed = image::process_image_bytes(&png, settings.image_compression)?;
+    let filename = image_filename(now);
+    let mut metadata = ClipboardMetadata::default();
+    metadata.file_name = Some(filename.clone());
+    metadata.file_ext = Some(".jpg".to_string());
+    metadata.file_size = Some(processed.compressed_size);
+    metadata.original_size = Some(processed.original_size);
+    metadata.compressed_size = Some(processed.compressed_size);
+    metadata.image_width = Some(processed.width);
+    metadata.image_height = Some(processed.height);
+    metadata
+        .extra
+        .insert("mimeType".to_string(), json!(processed.mime_type));
+
+    insert_and_emit(
+        app,
+        state,
+        ClipboardInsertInput {
+            content: Some(filename.clone()),
+            content_type: crate::models::ClipboardContentType::Image,
+            content_hash: hash.clone(),
+            preview: filename,
+            metadata: Some(metadata),
+            file_path: None,
+            image_data: Some(processed.bytes),
+        },
+        hash,
+        monitor,
+    )?;
+    monitor.next_image_scan_at = 0;
+    Ok(())
+}
+
+fn is_blacklisted(
+    _app: &AppHandle,
+    state: &AppState,
+    monitor: &mut ClipboardMonitor,
+) -> AppResult<bool> {
+    let now = now_millis();
+    if now >= monitor.next_blacklist_check_at {
+        let apps = state.repository().list_blacklist_apps()?;
+        monitor.last_blacklist_result = is_blacklisted_foreground_app(&apps);
+        monitor.next_blacklist_check_at = now + BLACKLIST_CHECK_INTERVAL_MS;
+    }
+    Ok(monitor.last_blacklist_result)
+}
+
+fn insert_and_emit(
+    app: &AppHandle,
+    state: &AppState,
+    input: ClipboardInsertInput,
+    hash: String,
+    monitor: &mut ClipboardMonitor,
+) -> AppResult<()> {
+    let item = state.repository().insert_clipboard_item(input)?;
+    monitor.remember_hash(hash);
+    state.set_monitoring_last_hash(monitor.last_hash());
+    let revision = state.bump_history_revision();
+    app.emit(events::CLIPBOARD_NEW_ITEM, &item)
+        .map_err(|err| AppError::from(format!("failed to emit clipboard item: {err}")))?;
+    let _ = app.emit(
+        events::HISTORY_REVISION,
+        HistoryRevisionPayload { revision },
+    );
+    Ok(())
+}
+
+fn file_metadata(path: &Path) -> ClipboardMetadata {
+    let mut metadata = ClipboardMetadata::default();
+    metadata.exists = Some(path.exists());
+    metadata.file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string);
+    metadata.file_ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| format!(".{ext}"));
+    if let Ok(stat) = fs::metadata(path) {
+        metadata.file_size = Some(stat.len());
+    }
+    metadata
+}
+
+fn image_filename(timestamp_ms: i64) -> String {
+    format!("screenshot_{timestamp_ms}.jpg")
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ClipboardContentType;
+
+    #[test]
+    fn text_capture_skips_empty_sensitive_too_large_and_duplicates() {
+        assert_eq!(
+            build_text_insert_input("", 100, true, ""),
+            CaptureDecision::Skip(CaptureSkipReason::Empty)
+        );
+        assert_eq!(
+            build_text_insert_input("password=secret123", 100, true, ""),
+            CaptureDecision::Skip(CaptureSkipReason::Sensitive)
+        );
+        assert_eq!(
+            build_text_insert_input("abcdef", 0, false, ""),
+            CaptureDecision::Skip(CaptureSkipReason::TooLarge)
+        );
+
+        let first = build_text_insert_input("hello", 100, true, "");
+        let CaptureDecision::Insert { hash, .. } = first else {
+            panic!("expected insert decision");
+        };
+        assert_eq!(
+            build_text_insert_input("hello", 100, true, &hash),
+            CaptureDecision::Skip(CaptureSkipReason::Duplicate)
+        );
+    }
+
+    #[test]
+    fn text_capture_builds_typed_insert_input() {
+        let decision = build_text_insert_input("https://example.com", 100, true, "");
+        let CaptureDecision::Insert { input, hash } = decision else {
+            panic!("expected insert decision");
+        };
+
+        assert_eq!(input.content_type, ClipboardContentType::Url);
+        assert_eq!(input.content.as_deref(), Some("https://example.com"));
+        assert_eq!(input.preview, "https://example.com");
+        assert_eq!(input.content_hash, hash);
+    }
+}
