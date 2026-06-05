@@ -115,13 +115,13 @@ if /I "%MODE%"=="check" (
 
 if /I "%MODE%"=="build" (
   echo Building ClipVault installer...
-  pnpm build
+  rustup run "%RUSTUP_TOOLCHAIN%" cmd /c pnpm build
   set "EXIT_CODE=%ERRORLEVEL%"
   goto finish
 )
 
 echo Starting ClipVault Tauri dev mode...
-pnpm tauri:dev
+rustup run "%RUSTUP_TOOLCHAIN%" cmd /c pnpm tauri:dev
 set "EXIT_CODE=%ERRORLEVEL%"
 goto finish
 
