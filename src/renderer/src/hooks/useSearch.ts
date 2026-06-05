@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { clipboardApi } from '@/lib/tauriApi';
 import { useClipboardStore } from '@/store/clipboardStore';
 
 export function useSearch(): void {
@@ -8,9 +9,9 @@ export function useSearch(): void {
   useEffect(() => {
     const timer = setTimeout(() => {
       if (query.trim()) {
-        void window.electron.searchItems(query).then(setItems);
+        void clipboardApi.searchItems(query).then(setItems);
       } else {
-        void window.electron.getHistory(300).then(setItems);
+        void clipboardApi.getHistory(300).then(setItems);
       }
     }, 300);
 

@@ -1,5 +1,6 @@
 import { ClipboardList, Minus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { clipboardApi } from '@/lib/tauriApi';
 
 export function TitleBar(): JSX.Element {
   return (
@@ -14,7 +15,7 @@ export function TitleBar(): JSX.Element {
           size="icon"
           title="最小化"
           onClick={() => {
-            void window.electron.minimizeWindow();
+            void clipboardApi.minimizeWindow();
           }}
         >
           <Minus className="h-4 w-4" />
@@ -24,7 +25,7 @@ export function TitleBar(): JSX.Element {
           size="icon"
           title="关闭"
           onClick={() => {
-            void window.electron.hideWindow();
+            void clipboardApi.hideWindow();
           }}
         >
           <X className="h-4 w-4" />

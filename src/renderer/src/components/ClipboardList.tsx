@@ -3,6 +3,7 @@ import { FixedSizeList as List, type ListChildComponentProps } from 'react-windo
 import type { ClipboardItem as ClipboardItemType } from '@shared/types';
 import { ClipboardItem } from '@/components/ClipboardItem';
 import { EmptyState } from '@/components/EmptyState';
+import { clipboardApi } from '@/lib/tauriApi';
 import { useClipboardStore } from '@/store/clipboardStore';
 
 const ITEM_HEIGHT = 110;
@@ -72,16 +73,16 @@ export function ClipboardList(): JSX.Element {
   }, []);
 
   const refreshHistory = useCallback(() => {
-    void window.electron.getHistory(300).then(setItems);
+    void clipboardApi.getHistory(300).then(setItems);
   }, [setItems]);
 
   const onPaste = useCallback((id: number) => {
-    void window.electron.pasteItem(id);
+    void clipboardApi.pasteItem(id);
   }, []);
 
   const onTogglePin = useCallback(
     (id: number) => {
-      void window.electron.togglePin(id).then((item) => {
+      void clipboardApi.togglePin(id).then((item) => {
         if (item) {
           upsertItem(item);
         } else {
@@ -94,7 +95,7 @@ export function ClipboardList(): JSX.Element {
 
   const onToggleFavorite = useCallback(
     (id: number) => {
-      void window.electron.toggleFavorite(id).then((item) => {
+      void clipboardApi.toggleFavorite(id).then((item) => {
         if (item) {
           upsertItem(item);
         } else {
@@ -107,7 +108,7 @@ export function ClipboardList(): JSX.Element {
 
   const onDelete = useCallback(
     (id: number) => {
-      void window.electron.deleteItem(id).then((result) => {
+      void clipboardApi.deleteItem(id).then((result) => {
         if (result.success) {
           removeItem(id);
         }

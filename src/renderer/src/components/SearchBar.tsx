@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Search, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { clipboardApi } from '@/lib/tauriApi';
 import { useClipboardStore } from '@/store/clipboardStore';
 
 export function SearchBar(): JSX.Element {
@@ -10,7 +11,7 @@ export function SearchBar(): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const offFocus = window.electron.onFocusSearch(() => {
+    const offFocus = clipboardApi.onFocusSearch(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     });

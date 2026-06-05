@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { clipboardApi } from '@/lib/tauriApi';
 import { useClipboardStore } from '@/store/clipboardStore';
 
 interface SettingsPanelProps {
@@ -113,7 +114,7 @@ function formatHotkeyLabel(value: string): string {
 }
 
 async function saveSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): Promise<AppSettings> {
-  return window.electron.updateSetting(key, value);
+  return clipboardApi.updateSetting(key, value);
 }
 
 export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: SettingsPanelProps): JSX.Element {
@@ -147,9 +148,9 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       return;
     }
     setActiveTab(initialTab);
-    void window.electron.getSettings().then(setSettings);
-    void window.electron.listBlacklist().then(setBlacklist);
-    void window.electron.getHotkeys().then(setHotkeys);
+    void clipboardApi.getSettings().then(setSettings);
+    void clipboardApi.listBlacklist().then(setBlacklist);
+    void clipboardApi.getHotkeys().then(setHotkeys);
   }, [open, initialTab, setSettings]);
 
   useEffect(() => {
@@ -197,11 +198,11 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
     setClearMessage('正在清理历史，请稍候...');
 
     try {
-      const result = await window.electron.clearHistory();
+      const result = await clipboardApi.clearHistory();
       if (!result.success) {
         throw new Error(result.error || 'clear-history-failed');
       }
-      const latestItems = await window.electron.getHistory(300);
+      const latestItems = await clipboardApi.getHistory(300);
       setItems(latestItems);
       const removedCount = Math.max(0, result.deleted ?? 0);
       setClearState('success');
@@ -227,14 +228,14 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
     if (!appName) {
       return;
     }
-    void window.electron.addBlacklist(appName).then((item) => {
+    void clipboardApi.addBlacklist(appName).then((item) => {
       setBlacklist((prev) => [...prev, item]);
       setNewAppName('');
     });
   };
 
   const removeBlacklist = (id: number) => {
-    void window.electron.removeBlacklist(id).then(() => {
+    void clipboardApi.removeBlacklist(id).then(() => {
       setBlacklist((prev) => prev.filter((item) => item.id !== id));
     });
   };
@@ -245,7 +246,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
     pressedKeysRef.current.clear();
     candidateComboRef.current = '';
     setHotkeyConflicts([]);
-    void window.electron.updateHotkeys(DEFAULT_HOTKEYS).then(setHotkeys);
+    void clipboardApi.updateHotkeys(DEFAULT_HOTKEYS).then(setHotkeys);
   };
 
   const cancelHotkeyRecording = () => {
@@ -321,12 +322,12 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
         const next = { ...hotkeys, [editingKey]: combo };
         cancelHotkeyRecording();
 
-        void window.electron.checkHotkeyConflicts(next).then((conflicts) => {
+        void clipboardApi.checkHotkeyConflicts(next).then((conflicts) => {
           setHotkeyConflicts(conflicts);
           if (conflicts.length > 0) {
             return;
           }
-          void window.electron.checkHotkeyAvailable(combo).then((available) => {
+          void clipboardApi.checkHotkeyAvailable(combo).then((available) => {
             if (!available) {
               const accepted = confirm(`快捷键 ${formatHotkeyLabel(combo)} 可能被其他应用占用，仍然保存吗？`);
               if (!accepted) {
@@ -334,7 +335,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 return;
               }
             }
-            void window.electron.updateHotkeys({ [editingKey]: combo }).then(setHotkeys);
+            void clipboardApi.updateHotkeys({ [editingKey]: combo }).then(setHotkeys);
           });
         });
         return;

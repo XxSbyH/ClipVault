@@ -1,4 +1,5 @@
 import type { HudPayload } from '@shared/types';
+import { clipboardApi } from '@/lib/tauriApi';
 import '@/hud.css';
 
 const container = document.getElementById('hud-container');
@@ -21,7 +22,7 @@ const iconLabel: Record<HudPayload['type'], string> = {
   email: '✉️'
 };
 
-window.electron.onHudShow((payload: HudPayload) => {
+clipboardApi.onHudShow((payload: HudPayload) => {
   if (!container || !directionEl || !iconEl || !textEl) {
     return;
   }

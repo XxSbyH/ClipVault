@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { useClipboardData } from '@/hooks/useClipboard';
 import { useSearch } from '@/hooks/useSearch';
+import { clipboardApi } from '@/lib/tauriApi';
 
 export default function App(): JSX.Element {
   useClipboardData();
@@ -18,11 +19,11 @@ export default function App(): JSX.Element {
   const [monitoring, setMonitoring] = useState(true);
 
   useEffect(() => {
-    const offOpenSettings = window.electron.onOpenSettings(() => {
+    const offOpenSettings = clipboardApi.onOpenSettings(() => {
       setSettingsTab('general');
       setSettingsOpen(true);
     });
-    const offOpenHotkeys = window.electron.onOpenHotkeys(() => {
+    const offOpenHotkeys = clipboardApi.onOpenHotkeys(() => {
       setSettingsTab('hotkeys');
       setSettingsOpen(true);
     });
@@ -54,7 +55,7 @@ export default function App(): JSX.Element {
             variant={monitoring ? 'outline' : 'destructive'}
             size="sm"
             onClick={() => {
-              void window.electron.toggleMonitoring().then(setMonitoring);
+              void clipboardApi.toggleMonitoring().then(setMonitoring);
             }}
           >
             {monitoring ? '暂停' : '恢复'}

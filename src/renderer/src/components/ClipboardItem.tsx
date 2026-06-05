@@ -15,6 +15,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ImageViewer } from '@/components/ImageViewer';
+import { clipboardApi } from '@/lib/tauriApi';
 import { cn } from '@/lib/utils';
 import type { ClipboardItem as ClipboardItemType } from '@shared/types';
 
@@ -77,7 +78,7 @@ function ClipboardItemView({
       setImageUrl(null);
       return;
     }
-    void window.electron.getImageDataUrl(item.id).then(setImageUrl);
+    void clipboardApi.getImageDataUrl(item.id).then(setImageUrl);
   }, [item.contentType, item.id]);
 
   const imageTitle = useMemo(() => {
