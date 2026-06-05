@@ -1,5 +1,9 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import { fileURLToPath } from 'node:url';
+
+const rendererSrc = fileURLToPath(new URL('./src/renderer/src', import.meta.url));
+const sharedSrc = fileURLToPath(new URL('./src/shared', import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
@@ -10,8 +14,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': '/src/renderer/src',
-      '@shared': '/src/shared'
+      '@': rendererSrc,
+      '@shared': sharedSrc
     }
   }
 });

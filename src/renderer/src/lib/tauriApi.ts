@@ -55,6 +55,9 @@ function listenPayload<T>(eventName: string, handler: (payload: T) => void): () 
   let unlisten: UnlistenFn | null = null;
 
   void listen<T>(eventName, (event) => {
+    if (disposed) {
+      return;
+    }
     handler(event.payload);
   }).then((nextUnlisten) => {
     if (disposed) {
@@ -86,10 +89,9 @@ function readableHotkeyConflicts(report: HotkeyConflictReport): string[] {
 function findAddedBlacklistApp(apps: BlacklistApp[], appName: string): BlacklistApp {
   const normalized = appName.trim().toLowerCase();
   const matches = apps.filter((app) => app.appName.trim().toLowerCase() === normalized);
-  for (let index = matches.length - 1; index >= 0; index -= 1) {
-    if (!matches[index].isBuiltin) {
-      return matches[index];
-    }
+  const customMatches = matches.filter((app) => !app.isBuiltin);
+  if (customMatches.length > 0) {
+    return customMatches.reduce((latest, app) => (app.id > latest.id ? app : latest));
   }
   return matches.at(-1) ?? apps.at(-1) ?? {
     id: Date.now(),
@@ -151,8 +153,10 @@ export const clipboardApi: ClipboardApi = {
   },
   async clearHistory(): Promise<ClearHistoryResult> {
     try {
+      const before = await invoke<ClipboardItem[]>('get_history', { limit: 1000 });
       await invoke<number>('clear_history', { includeFavorites: false });
-      return { success: true, deleted: 0 };
+      const after = await invoke<ClipboardItem[]>('get_history', { limit: 1000 });
+      return { success: true, deleted: Math.max(0, before.length - after.length) };
     } catch (error) {
       return { success: false, deleted: 0, error: errorMessage(error) };
     }

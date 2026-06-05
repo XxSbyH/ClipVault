@@ -228,15 +228,15 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
     if (!appName) {
       return;
     }
-    void clipboardApi.addBlacklist(appName).then((item) => {
-      setBlacklist((prev) => [...prev, item]);
+    void clipboardApi.addBlacklist(appName).then(() => {
       setNewAppName('');
+      void clipboardApi.listBlacklist().then(setBlacklist);
     });
   };
 
   const removeBlacklist = (id: number) => {
     void clipboardApi.removeBlacklist(id).then(() => {
-      setBlacklist((prev) => prev.filter((item) => item.id !== id));
+      void clipboardApi.listBlacklist().then(setBlacklist);
     });
   };
 

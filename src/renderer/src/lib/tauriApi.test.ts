@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ClipboardItem } from '@shared/types';
+import type { BlacklistApp, ClipboardItem } from '@shared/types';
 
 const { invokeMock, listenMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -86,6 +86,59 @@ describe('clipboardApi Tauri adapter', () => {
     });
     expect(invokeMock).toHaveBeenCalledWith('paste_item', { id: 3 });
   });
+
+  it('maps clear_history to a real deleted count using before and after history', async () => {
+    const { clipboardApi } = await import('./tauriApi');
+    invokeMock
+      .mockResolvedValueOnce([makeItem(1), makeItem(2), makeItem(3)])
+      .mockResolvedValueOnce(4)
+      .mockResolvedValueOnce([makeItem(3)]);
+
+    await expect(clipboardApi.clearHistory()).resolves.toEqual({
+      success: true,
+      deleted: 2
+    });
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_history', { limit: 1000 });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'clear_history', { includeFavorites: false });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'get_history', { limit: 1000 });
+  });
+
+  it('returns the newest matching custom blacklist app when command returns a full list', async () => {
+    const { clipboardApi } = await import('./tauriApi');
+    const apps: BlacklistApp[] = [
+      makeBlacklistApp(10, 'Chrome.exe', false),
+      makeBlacklistApp(2, 'Chrome.exe', false),
+      makeBlacklistApp(99, 'Chrome.exe', true)
+    ];
+    invokeMock.mockResolvedValueOnce(apps);
+
+    await expect(clipboardApi.addBlacklist('chrome.exe')).resolves.toEqual(apps[0]);
+  });
+
+  it('does not call listener handlers after unsubscribe even if Tauri resolves later', async () => {
+    const item = makeItem(5);
+    const unlisten = vi.fn();
+    const handler = vi.fn();
+    const listenerRef: { current?: (event: { payload: ClipboardItem }) => void } = {};
+    const resolveRef: { current?: (value: () => void) => void } = {};
+    listenMock.mockImplementationOnce(async (_eventName, callback) => {
+      listenerRef.current = callback;
+      return new Promise((resolve) => {
+        resolveRef.current = resolve;
+      });
+    });
+    const { clipboardApi } = await import('./tauriApi');
+
+    const off = clipboardApi.onNewItem(handler);
+    off();
+    listenerRef.current?.({ payload: item });
+    resolveRef.current?.(unlisten);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
 });
 
 function makeItem(id: number): ClipboardItem {
@@ -103,5 +156,15 @@ function makeItem(id: number): ClipboardItem {
     useCount: 0,
     isPinned: false,
     isFavorite: false
+  };
+}
+
+function makeBlacklistApp(id: number, appName: string, isBuiltin: boolean): BlacklistApp {
+  return {
+    id,
+    appName,
+    appPath: null,
+    isBuiltin,
+    createdAt: 1_700_000_000 + id
   };
 }
