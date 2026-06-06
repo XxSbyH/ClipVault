@@ -146,6 +146,10 @@ button {
   display: none;
 }
 
+.settings-tab-panel {
+  scrollbar-gutter: stable;
+}
+
 .line-clamp-2,
 .line-clamp-3 {
   display: -webkit-box;

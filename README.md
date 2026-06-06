@@ -161,3 +161,21 @@ Tauri 的 NSIS/Wix 工具通过 `bundle.useLocalToolsDir` 缓存在 `src-tauri\t
 - 面板内 `Delete`：删除当前项。
 - 面板内 `Ctrl+D`：切换收藏。
 - 面板内 `Esc`：隐藏窗口。
+
+## Gitflow 与自动发布
+
+仓库使用轻量 Gitflow：
+
+- `main` 保持可发布状态，推送到 `main` 会触发 GitHub Actions 构建 Windows x64 产物，并上传到本次 Actions run 的 artifacts。
+- 日常功能开发建议使用 `feature/*` 分支，稳定后合并回 `main`。
+- 准备正式版本时，同时更新 `package.json` 与 `src-tauri/tauri.conf.json` 里的版本号，提交后创建 `vX.Y.Z` 标签。
+- 推送 `v*` 标签会自动打包 Windows 安装包并发布 GitHub Release。
+
+发布命令示例：
+
+```powershell
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+当前工作流文件位于 `.github/workflows/release.yml`。Release 由 GitHub Actions 在 `windows-latest` 上执行 `pnpm typecheck`、`pnpm test`、`cargo fmt --check`、`cargo test`、`cargo clippy` 和 Tauri 打包。当前版本未配置代码签名，因此 Windows 首次安装时可能出现系统安全提示。
