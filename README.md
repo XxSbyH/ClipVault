@@ -103,7 +103,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 
 - 前端静态资源：`dist/renderer/`
 - Release 可执行文件：`src-tauri/target/release/clipvault.exe`
-- NSIS 安装包：`src-tauri/target/release/bundle/nsis/ClipVault_0.1.0_x64-setup.exe`
+- NSIS 安装包：`src-tauri/target/release/bundle/nsis/ClipVault_2.0.0_x64-setup.exe`
 
 当前配置启用 `bundle.useLocalToolsDir`，Tauri 会优先使用项目 target 下的本地工具目录缓存 NSIS/Wix 等打包工具。若构建机要求工具下载落到固定磁盘，可将 `src-tauri/target/.tauri` 建成指向目标目录的 junction，例如：
 
@@ -174,8 +174,8 @@ Tauri 的 NSIS/Wix 工具通过 `bundle.useLocalToolsDir` 缓存在 `src-tauri\t
 发布命令示例：
 
 ```powershell
-git tag v0.1.1
-git push origin v0.1.1
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
 当前工作流文件位于 `.github/workflows/release.yml`。Release 由 GitHub Actions 在 `windows-latest` 上执行 `pnpm typecheck`、`pnpm test`、`cargo fmt --check`、`cargo test`、`cargo clippy` 和 Tauri 打包。当前版本未配置代码签名，因此 Windows 首次安装时可能出现系统安全提示。
