@@ -5,8 +5,8 @@ import type { ClipboardItem } from '@shared/types';
 import { ClipboardList } from '@/components/ClipboardList';
 import { useClipboardStore } from '@/store/clipboardStore';
 
-const { pasteItemMock, deleteItemMock, hideWindowMock, listPropsMock } = vi.hoisted(() => ({
-  pasteItemMock: vi.fn(),
+const { copyItemMock, deleteItemMock, hideWindowMock, listPropsMock } = vi.hoisted(() => ({
+  copyItemMock: vi.fn(),
   deleteItemMock: vi.fn(),
   hideWindowMock: vi.fn(),
   listPropsMock: vi.fn()
@@ -15,7 +15,7 @@ const { pasteItemMock, deleteItemMock, hideWindowMock, listPropsMock } = vi.hois
 vi.mock('@/lib/tauriApi', () => ({
   clipboardApi: {
     getHistory: vi.fn().mockResolvedValue([]),
-    pasteItem: pasteItemMock,
+    copyItem: copyItemMock,
     deleteItem: deleteItemMock,
     hideWindow: hideWindowMock,
     togglePin: vi.fn(),
@@ -93,7 +93,13 @@ describe('ClipboardList', () => {
     }
 
     vi.stubGlobal('ResizeObserver', ResizeObserverMock);
-    pasteItemMock.mockResolvedValue({ success: true });
+    copyItemMock.mockImplementation((id: number) => {
+      const item = useClipboardStore.getState().items.find((entry) => entry.id === id);
+      return Promise.resolve({
+        success: true,
+        item: item ? { ...item, useCount: item.useCount + 1 } : undefined
+      });
+    });
     deleteItemMock.mockResolvedValue({ success: true });
     hideWindowMock.mockResolvedValue(undefined);
     useClipboardStore.setState({
@@ -126,6 +132,16 @@ describe('ClipboardList', () => {
     expect(screen.queryByText('charlie')).not.toBeInTheDocument();
   });
 
+  it('searches text across content types even when another type filter is active', () => {
+    useClipboardStore.setState({ selectedType: 'image', searchQuery: 'alpha' });
+
+    render(<ClipboardList />);
+
+    expect(screen.getByText('alpha')).toBeInTheDocument();
+    expect(screen.queryByText('bravo')).not.toBeInTheDocument();
+    expect(screen.queryByText('charlie')).not.toBeInTheDocument();
+  });
+
   it('selects the next item with ArrowDown', async () => {
     render(<ClipboardList />);
 
@@ -138,7 +154,7 @@ describe('ClipboardList', () => {
     expect(useClipboardStore.getState().selectedItemId).toBe(2);
   });
 
-  it('pastes the selected item with Enter', async () => {
+  it('copies the selected item with Enter', async () => {
     render(<ClipboardList />);
 
     await waitFor(() => {
@@ -146,7 +162,73 @@ describe('ClipboardList', () => {
     });
     fireEvent.keyDown(window, { key: 'Enter' });
 
-    expect(pasteItemMock).toHaveBeenCalledWith(3);
+    await waitFor(() => {
+      expect(copyItemMock).toHaveBeenCalledWith(3);
+    });
+  });
+
+  it('copies a clicked history item without hiding the panel', async () => {
+    render(<ClipboardList />);
+
+    const row = screen.getByText('alpha').closest('[role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.click(row as HTMLElement);
+
+    await waitFor(() => {
+      expect(copyItemMock).toHaveBeenCalledWith(1);
+    });
+    expect(hideWindowMock).not.toHaveBeenCalled();
+    expect(useClipboardStore.getState().selectedItemId).toBe(1);
+  });
+
+  it('keeps the latest clicked item selected when copy responses resolve out of order', async () => {
+    let resolveFirst!: (value: { success: boolean; item: ClipboardItem }) => void;
+    let resolveSecond!: (value: { success: boolean; item: ClipboardItem }) => void;
+    copyItemMock.mockReset();
+    copyItemMock
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecond = resolve;
+        })
+      );
+
+    render(<ClipboardList />);
+    await waitFor(() => {
+      expect(useClipboardStore.getState().selectedItemId).toBe(3);
+    });
+
+    const alpha = screen.getByText('alpha').closest('[role="button"]');
+    const bravo = screen.getByText('bravo').closest('[role="button"]');
+    expect(alpha).toBeTruthy();
+    expect(bravo).toBeTruthy();
+
+    fireEvent.click(alpha as HTMLElement);
+    await waitFor(() => {
+      expect(copyItemMock).toHaveBeenCalledWith(1);
+    });
+
+    fireEvent.click(bravo as HTMLElement);
+    expect(useClipboardStore.getState().selectedItemId).toBe(2);
+    expect(copyItemMock).toHaveBeenCalledTimes(1);
+
+    resolveFirst({ success: true, item: makeItem(1, 'alpha', { useCount: 1 }) });
+
+    await waitFor(() => {
+      expect(copyItemMock).toHaveBeenCalledWith(2);
+      expect(useClipboardStore.getState().selectedItemId).toBe(2);
+    });
+
+    resolveSecond({ success: true, item: makeItem(2, 'bravo', { isFavorite: true, useCount: 1 }) });
+
+    await waitFor(() => {
+      expect(useClipboardStore.getState().selectedItemId).toBe(2);
+      expect(useClipboardStore.getState().items.find((item) => item.id === 2)?.useCount).toBe(1);
+    });
   });
 
   it('deletes the selected item with Delete', async () => {
@@ -190,7 +272,7 @@ describe('ClipboardList', () => {
     fireEvent.keyDown(button, { key: 'Escape' });
 
     expect(deleteItemMock).not.toHaveBeenCalled();
-    expect(pasteItemMock).not.toHaveBeenCalled();
+    expect(copyItemMock).not.toHaveBeenCalled();
     expect(hideWindowMock).not.toHaveBeenCalled();
 
     input.remove();
@@ -207,7 +289,7 @@ describe('ClipboardList', () => {
         expect.objectContaining({
           height: 512,
           itemCount: 3,
-          itemSize: 106
+          itemSize: 78
         })
       );
     });

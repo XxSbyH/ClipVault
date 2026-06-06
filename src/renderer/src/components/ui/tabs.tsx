@@ -45,7 +45,7 @@ export function TabsTrigger({
     <button
       className={cn(
         'rounded-sm px-3 py-1.5 text-sm transition-colors',
-        active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+        active ? 'bg-teal-700 text-white shadow-sm' : 'text-muted-foreground hover:bg-slate-50 hover:text-foreground',
         className
       )}
       onClick={() => ctx?.onValueChange(value)}

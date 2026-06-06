@@ -3,20 +3,38 @@
 @tailwind utilities;
 
 :root {
-  --background: 174 85% 97%;
-  --foreground: 174 61% 18%;
+  --background: 160 33% 97%;
+  --foreground: 170 35% 14%;
   --card: 0 0% 100%;
   --card-foreground: 174 61% 18%;
-  --border: 172 54% 84%;
-  --input: 172 54% 84%;
-  --muted: 173 58% 94%;
-  --muted-foreground: 179 24% 38%;
+  --border: 180 18% 88%;
+  --input: 180 18% 88%;
+  --muted: 160 20% 96%;
+  --muted-foreground: 178 17% 40%;
   --primary: 174 84% 32%;
   --primary-foreground: 0 0% 100%;
   --secondary: 170 76% 92%;
   --secondary-foreground: 174 71% 24%;
   --ring: 174 84% 32%;
   --accent-warm: 24 95% 53%;
+}
+
+:root.dark {
+  --background: 170 32% 7%;
+  --foreground: 170 24% 94%;
+  --card: 170 27% 10%;
+  --card-foreground: 170 24% 94%;
+  --border: 172 22% 22%;
+  --input: 172 22% 22%;
+  --muted: 170 24% 13%;
+  --muted-foreground: 170 12% 68%;
+  --primary: 174 78% 36%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 170 26% 18%;
+  --secondary-foreground: 170 26% 88%;
+  --ring: 174 78% 42%;
+  --accent-warm: 24 95% 58%;
+  color-scheme: dark;
 }
 
 * {
@@ -34,9 +52,10 @@ body {
   @apply bg-background text-foreground antialiased;
   margin: 0;
   font-family:
-    'Plus Jakarta Sans',
+    'Aptos',
+    'Bahnschrift',
+    'Microsoft YaHei UI',
     'Microsoft YaHei',
-    'PingFang SC',
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -63,9 +82,18 @@ button {
 
 .app-shell {
   background:
-    radial-gradient(circle at 10% 8%, rgb(20 184 166 / 24%), transparent 28%),
-    radial-gradient(circle at 86% 18%, rgb(249 115 22 / 18%), transparent 25%),
-    linear-gradient(155deg, #ecfdf5 0%, #f0fdfa 46%, #fff7ed 100%);
+    linear-gradient(rgb(15 23 42 / 3%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(15 23 42 / 3%) 1px, transparent 1px),
+    #f7fbf8;
+  background-size: 24px 24px;
+}
+
+.dark .app-shell {
+  background:
+    linear-gradient(rgb(148 163 184 / 7%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(148 163 184 / 7%) 1px, transparent 1px),
+    #081412;
+  background-size: 24px 24px;
 }
 
 .panel-ambient {
@@ -73,29 +101,29 @@ button {
   position: absolute;
   border-radius: 999px;
   filter: blur(20px);
-  opacity: 0.7;
+  opacity: 0.45;
 }
 
 .panel-ambient-a {
   left: -86px;
   top: 122px;
-  height: 220px;
-  width: 220px;
-  background: rgb(13 148 136 / 20%);
+  height: 190px;
+  width: 190px;
+  background: rgb(13 148 136 / 16%);
 }
 
 .panel-ambient-b {
   bottom: 76px;
   right: -94px;
-  height: 230px;
-  width: 230px;
-  background: rgb(249 115 22 / 15%);
+  height: 200px;
+  width: 200px;
+  background: rgb(249 115 22 / 10%);
 }
 
-.command-header,
+.command-console,
 .list-surface,
 .detail-panel {
-  animation: panel-enter 260ms ease both;
+  animation: panel-enter 220ms ease both;
 }
 
 .list-surface {
@@ -108,6 +136,14 @@ button {
 
 .clipboard-item-card {
   will-change: transform;
+}
+
+.filter-strip {
+  scrollbar-width: none;
+}
+
+.filter-strip::-webkit-scrollbar {
+  display: none;
 }
 
 .line-clamp-2,
@@ -151,6 +187,73 @@ button {
 ::-webkit-scrollbar-thumb:hover {
   background: rgb(13 148 136 / 42%);
   background-clip: content-box;
+}
+
+.dark .command-console,
+.dark .detail-panel,
+.dark .settings-dialog,
+.dark .settings-header {
+  border-color: rgb(45 77 72 / 92%) !important;
+  background-color: #10201e !important;
+}
+
+.dark .list-surface,
+.dark .bg-\[\#f7fbf8\],
+.dark .bg-\[\#f8fbfa\] {
+  background-color: #0b1715 !important;
+}
+
+.dark .bg-white,
+.dark .bg-card {
+  background-color: #10201e !important;
+}
+
+.dark .bg-slate-50,
+.dark .bg-slate-50\/60,
+.dark .bg-slate-100\/70 {
+  background-color: rgb(22 38 36 / 86%) !important;
+}
+
+.dark .bg-teal-50,
+.dark .bg-teal-50\/35,
+.dark .bg-teal-50\/45,
+.dark .bg-teal-50\/65 {
+  background-color: rgb(20 83 75 / 34%) !important;
+}
+
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-teal-100 {
+  border-color: rgb(45 77 72 / 90%) !important;
+}
+
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-teal-950 {
+  color: #f3fbf8 !important;
+}
+
+.dark .text-slate-700,
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-muted-foreground {
+  color: #9fb9b3 !important;
+}
+
+.dark .text-slate-400 {
+  color: #7f9b95 !important;
+}
+
+.dark input,
+.dark select {
+  border-color: rgb(45 77 72 / 92%) !important;
+  background-color: #0b1715 !important;
+  color: #f3fbf8 !important;
+}
+
+.dark input::placeholder {
+  color: #6f8c86 !important;
 }
 
 @keyframes panel-enter {

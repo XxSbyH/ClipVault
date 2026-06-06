@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Monitor, Moon, Sun, X } from 'lucide-react';
 import { DEFAULT_HOTKEYS, type AppSettings, type BlacklistApp, type HotkeySettings } from '@shared/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { clipboardApi } from '@/lib/tauriApi';
+import { cn } from '@/lib/utils';
 import { useClipboardStore } from '@/store/clipboardStore';
 
 type SettingsTab = 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about';
@@ -59,6 +60,32 @@ const WHEEL_MODIFIER_OPTIONS: Array<{ value: AppSettings['wheelShortcutModifier'
 const WHEEL_SCOPE_OPTIONS: Array<{ value: AppSettings['wheelShortcutScope']; label: string }> = [
   { value: 'global', label: '全局生效' },
   { value: 'panel-only', label: '仅面板打开时' }
+];
+
+const THEME_MODE_OPTIONS: Array<{
+  value: AppSettings['themeMode'];
+  label: string;
+  description: string;
+  icon: JSX.Element;
+}> = [
+  {
+    value: 'system',
+    label: '跟随系统',
+    description: '随 Windows 亮暗色自动切换',
+    icon: <Monitor className="h-4 w-4" />
+  },
+  {
+    value: 'light',
+    label: '亮色',
+    description: '清爽、低干扰的默认外观',
+    icon: <Sun className="h-4 w-4" />
+  },
+  {
+    value: 'dark',
+    label: '暗色',
+    description: '夜间和低光环境更舒适',
+    icon: <Moon className="h-4 w-4" />
+  }
 ];
 
 const DISPLAY_TOKEN_MAP: Record<string, string> = {
@@ -218,6 +245,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
         enableBlacklist: true,
         textLimitKb: 100,
         imageCompression: 'high',
+        themeMode: 'system',
         launchOnStartup: false,
         wheelShortcutEnabled: true,
         wheelShortcutModifier: 'ctrl',
@@ -456,27 +484,35 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       open={open}
       onOpenChange={onOpenChange}
     >
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-auto rounded-3xl border-teal-100 bg-white/95 p-5 shadow-2xl">
-        <DialogHeader className="flex flex-row items-start justify-between gap-3">
-          <div className="space-y-1">
-            <DialogTitle className="text-lg font-black">设置</DialogTitle>
-            <DialogDescription>管理保留策略、隐私过滤、存储限制和快捷键。</DialogDescription>
+      <DialogContent className="settings-dialog max-h-[90vh] max-w-[860px] overflow-auto rounded-[1.65rem] border border-slate-200 bg-[#f7fbf8] p-4 shadow-2xl">
+        <DialogHeader className="settings-header mb-4 flex flex-row items-center justify-between gap-3 rounded-[1.35rem] border border-slate-200 bg-white px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-teal-700">ClipVault Settings</p>
+            <DialogTitle className="mt-1 text-lg font-semibold tracking-tight text-slate-950">偏好设置</DialogTitle>
+            <DialogDescription className="mt-1 text-sm text-slate-500">
+              管理保留策略、隐私过滤、存储限制、快捷键和外观。
+            </DialogDescription>
           </div>
-          <DialogClose className="rounded-full">
-            <X className="h-4 w-4" />
-          </DialogClose>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="hidden rounded-full border border-teal-100 bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-800 sm:inline-flex">
+              本地优先
+            </span>
+            <DialogClose className="shrink-0 rounded-full border border-slate-200 bg-white">
+              <X className="h-4 w-4" />
+            </DialogClose>
+          </div>
         </DialogHeader>
 
         <Tabs
           value={activeTab}
           onValueChange={(value) => setActiveTab(value as SettingsTab)}
         >
-          <TabsList className="grid w-full grid-cols-5 rounded-2xl bg-teal-50 p-1">
-            <TabsTrigger value="general">常规</TabsTrigger>
-            <TabsTrigger value="privacy">隐私</TabsTrigger>
-            <TabsTrigger value="storage">存储</TabsTrigger>
-            <TabsTrigger value="hotkeys">快捷键</TabsTrigger>
-            <TabsTrigger value="about">关于</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-5 rounded-2xl border border-slate-200 bg-white p-1">
+            <TabsTrigger className="rounded-xl font-medium" value="general">常规</TabsTrigger>
+            <TabsTrigger className="rounded-xl font-medium" value="privacy">隐私</TabsTrigger>
+            <TabsTrigger className="rounded-xl font-medium" value="storage">存储</TabsTrigger>
+            <TabsTrigger className="rounded-xl font-medium" value="hotkeys">快捷键</TabsTrigger>
+            <TabsTrigger className="rounded-xl font-medium" value="about">关于</TabsTrigger>
           </TabsList>
 
           {errorMessage ? (
@@ -485,11 +521,42 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
             </div>
           ) : null}
 
-          <TabsContent value="general" className="space-y-4 pt-3">
-            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-teal-50/40 p-3">
+          <TabsContent value="general" className="space-y-3 pt-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <div>
+                <p className="text-sm font-semibold">主题模式</p>
+                <p className="mt-1 text-xs text-muted-foreground">默认跟随系统，也可以固定为亮色或暗色。</p>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {THEME_MODE_OPTIONS.map((option) => {
+                  const selected = safeSettings.themeMode === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      aria-label={`主题模式：${option.label}`}
+                      className={cn(
+                        'rounded-2xl border p-3 text-left transition-colors',
+                        selected
+                          ? 'border-teal-500 bg-teal-50 text-teal-950 ring-2 ring-teal-100'
+                          : 'border-slate-200 bg-slate-50/60 text-slate-700 hover:border-teal-200 hover:bg-teal-50/45'
+                      )}
+                      onClick={() => update('themeMode', option.value)}
+                    >
+                      <span className="flex items-center gap-2 text-sm font-semibold">
+                        {option.icon}
+                        {option.label}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">{option.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-sm font-semibold">保留时长</span>
               <select
-                className="h-10 rounded-xl border border-teal-100 bg-white px-3 text-sm"
+                className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
                 value={safeSettings.retentionDays}
                 onChange={(event) => update('retentionDays', Number(event.target.value))}
               >
@@ -499,7 +566,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 <option value={3650}>永久</option>
               </select>
             </div>
-            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-sm font-semibold">最大条目数</span>
               <Input
                 type="number"
@@ -509,7 +576,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 onChange={(event) => update('maxItems', Number(event.target.value))}
               />
             </div>
-            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-sm font-semibold">开机自启动</span>
               <div className="flex justify-end">
                 <Switch
@@ -537,8 +604,8 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
             </div>
           </TabsContent>
 
-          <TabsContent value="privacy" className="space-y-4 pt-3">
-            <div className="grid grid-cols-[1fr_120px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+          <TabsContent value="privacy" className="space-y-3 pt-3">
+            <div className="grid grid-cols-[1fr_120px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3">
               <div>
                 <p className="text-sm font-semibold">启用敏感内容过滤</p>
                 <p className="mt-1 text-xs text-muted-foreground">自动跳过密码、卡号、令牌等敏感内容。</p>
@@ -550,7 +617,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 />
               </div>
             </div>
-            <div className="grid grid-cols-[1fr_120px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+            <div className="grid grid-cols-[1fr_120px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3">
               <div>
                 <p className="text-sm font-semibold">启用应用黑名单</p>
                 <p className="mt-1 text-xs text-muted-foreground">在黑名单应用中复制的内容不会被记录。</p>
@@ -563,7 +630,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
               </div>
             </div>
 
-            <div className="space-y-3 rounded-2xl border border-teal-100 bg-teal-50/35 p-3">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold">黑名单应用</p>
                 <button
@@ -597,7 +664,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 {blacklist.map((app) => (
                   <div
                     key={app.id}
-                    className="flex items-center justify-between rounded-xl border border-teal-100 bg-white px-3 py-2 text-sm"
+                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm"
                   >
                     <div className="flex min-w-0 items-center gap-2">
                       {app.isBuiltin ? <Badge>内置</Badge> : <Badge className="bg-teal-50 text-teal-700">自定义</Badge>}
@@ -619,8 +686,8 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
             </div>
           </TabsContent>
 
-          <TabsContent value="storage" className="space-y-4 pt-3">
-            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+          <TabsContent value="storage" className="space-y-3 pt-3">
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-sm font-semibold">文本限制（KB）</span>
               <Input
                 type="number"
@@ -630,10 +697,10 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 onChange={(event) => update('textLimitKb', Number(event.target.value))}
               />
             </div>
-            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-teal-100 bg-white p-3">
+            <div className="grid grid-cols-[1fr_180px] items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-sm font-semibold">图片压缩</span>
               <select
-                className="h-10 rounded-xl border border-teal-100 bg-white px-3 text-sm"
+                className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
                 value={safeSettings.imageCompression}
                 onChange={(event) => update('imageCompression', event.target.value as AppSettings['imageCompression'])}
               >
@@ -644,12 +711,12 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
             </div>
           </TabsContent>
 
-          <TabsContent value="hotkeys" className="space-y-4 pt-3 text-sm">
-            <div className="rounded-2xl border border-teal-100 bg-teal-50/45 p-3 text-xs leading-5 text-muted-foreground">
+          <TabsContent value="hotkeys" className="space-y-3 pt-3 text-sm">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-5 text-muted-foreground">
               点击右侧快捷键重新录入。按 Esc 可取消录入；检测到冲突时不会保存。
             </div>
 
-            <div className="space-y-3 rounded-2xl border border-teal-100 bg-white p-3">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold">鼠标滚轮快捷键</p>
@@ -664,7 +731,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 <label className="space-y-1 text-xs font-semibold text-muted-foreground">
                   <span>修饰键</span>
                   <select
-                    className="h-10 w-full rounded-xl border border-teal-100 bg-white px-3 text-sm text-foreground"
+                    className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-foreground"
                     value={safeSettings.wheelShortcutModifier}
                     disabled={!safeSettings.wheelShortcutEnabled}
                     onChange={(event) =>
@@ -681,7 +748,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 <label className="space-y-1 text-xs font-semibold text-muted-foreground">
                   <span>生效范围</span>
                   <select
-                    className="h-10 w-full rounded-xl border border-teal-100 bg-white px-3 text-sm text-foreground"
+                    className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-foreground"
                     value={safeSettings.wheelShortcutScope}
                     disabled={!safeSettings.wheelShortcutEnabled}
                     onChange={(event) =>
@@ -735,7 +802,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
           </TabsContent>
 
           <TabsContent value="about" className="space-y-3 pt-3 text-sm">
-            <div className="rounded-2xl border border-teal-100 bg-teal-50/45 p-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <p className="font-black text-slate-950">ClipVault v0.1.0</p>
               <p className="mt-2 text-muted-foreground">当前缓存条目：{itemsCount}</p>
               <p className="mt-1 text-muted-foreground">数据默认保存在本地 Tauri 应用数据目录。</p>
@@ -765,14 +832,14 @@ function HotkeyGroup({
   onRecord
 }: HotkeyGroupProps): JSX.Element {
   return (
-    <div className="space-y-2 rounded-2xl border border-teal-100 bg-white p-3">
+    <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
       <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">{title}</p>
       {keys.map((key) => {
         const value = hotkeys?.[key] ?? DEFAULT_HOTKEYS[key];
         return (
           <div
             key={key}
-            className="flex items-center justify-between gap-3 border-b border-teal-50 py-2 last:border-0"
+            className="flex items-center justify-between gap-3 border-b border-slate-100 py-2 last:border-0"
           >
             <div className="min-w-0">
               <p className="text-sm font-semibold">{HOTKEY_LABELS[key]}</p>

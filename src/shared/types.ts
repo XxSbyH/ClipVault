@@ -55,6 +55,7 @@ export interface AppSettings {
   enableBlacklist: boolean;
   textLimitKb: number;
   imageCompression: 'original' | 'high' | 'medium';
+  themeMode: 'system' | 'light' | 'dark';
   launchOnStartup: boolean;
   wheelShortcutEnabled: boolean;
   wheelShortcutModifier: 'ctrl' | 'alt' | 'shift' | 'ctrl+alt';
@@ -68,6 +69,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   enableBlacklist: true,
   textLimitKb: 100,
   imageCompression: 'high',
+  themeMode: 'system',
   launchOnStartup: false,
   wheelShortcutEnabled: true,
   wheelShortcutModifier: 'ctrl',
@@ -84,8 +86,10 @@ export interface HotkeySettings {
 }
 
 export interface HudPayload {
-  direction: 'prev' | 'next';
-  type: ClipboardContentType;
+  kind: 'quickPaste' | 'copy' | 'panel' | 'status';
+  title: string;
+  direction?: 'prev' | 'next';
+  type?: ClipboardContentType;
   text: string;
 }
 
@@ -121,6 +125,7 @@ export interface ClipboardApi {
   getHistoryRevision: () => Promise<number>;
   searchItems: (query: string) => Promise<ClipboardItem[]>;
   pasteItem: (id: number) => Promise<{ success: boolean; error?: string }>;
+  copyItem: (id: number) => Promise<{ success: boolean; item?: ClipboardItem; error?: string }>;
   deleteItem: (id: number) => Promise<{ success: boolean; error?: string }>;
   togglePin: (id: number) => Promise<ClipboardItem | null>;
   toggleFavorite: (id: number) => Promise<ClipboardItem | null>;

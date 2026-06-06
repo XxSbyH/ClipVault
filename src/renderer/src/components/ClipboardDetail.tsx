@@ -9,12 +9,10 @@ import {
   Image as ImageIcon,
   Link2,
   Mail,
-  Palette,
-  Pin,
-  Star,
-  Trash2
+  Palette
 } from 'lucide-react';
 import type { ClipboardItem } from '@shared/types';
+import { ImageViewer } from '@/components/ImageViewer';
 import { Button } from '@/components/ui/button';
 import { clipboardApi } from '@/lib/tauriApi';
 import { cn } from '@/lib/utils';
@@ -67,20 +65,26 @@ export function ClipboardDetail(): JSX.Element {
   const items = useClipboardStore((state) => state.items);
   const selectedItemId = useClipboardStore((state) => state.selectedItemId);
   const upsertItem = useClipboardStore((state) => state.upsertItem);
-  const removeItem = useClipboardStore((state) => state.removeItem);
   const item = items.find((entry) => entry.id === selectedItemId) ?? null;
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [showViewer, setShowViewer] = useState(false);
   const [copied, setCopied] = useState(false);
+  const itemId = item?.id ?? null;
+  const itemType = item?.contentType ?? null;
 
   useEffect(() => {
     setCopied(false);
-    if (!item || item.contentType !== 'image') {
+    setShowViewer(false);
+  }, [itemId]);
+
+  useEffect(() => {
+    if (!itemId || itemType !== 'image') {
       setImageUrl(null);
       return;
     }
     setImageUrl(null);
     let cancelled = false;
-    const imageId = item.id;
+    const imageId = itemId;
     void clipboardApi
       .getImageDataUrl(imageId)
       .then((url) => {
@@ -96,16 +100,16 @@ export function ClipboardDetail(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [item]);
+  }, [itemId, itemType]);
 
   if (!item) {
     return (
-      <aside className="detail-panel flex min-h-[154px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-200/80 bg-white/65 px-4 text-center">
-        <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-teal-50 text-teal-700">
-          <FileText className="h-5 w-5" />
+      <aside className="detail-panel flex h-full min-h-0 flex-col justify-center rounded-[1.35rem] border border-dashed border-slate-200 bg-white px-4 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-50 text-slate-500">
+          <FileText className="h-[18px] w-[18px]" />
         </div>
-        <p className="text-sm font-semibold text-foreground">选择一条历史记录</p>
-        <p className="mt-1 text-xs text-muted-foreground">预览内容、路径、大小和使用状态。</p>
+        <p className="text-sm font-semibold text-slate-900">详情预览</p>
+        <p className="mt-1 text-xs leading-5 text-slate-500">方向键选择历史记录，Enter 或点击列表可复制到剪贴板。</p>
       </aside>
     );
   }
@@ -113,109 +117,101 @@ export function ClipboardDetail(): JSX.Element {
   const size = formatFileSize(item.metadata.fileSize ?? item.metadata.compressedSize);
   const time = formatDistanceToNow(new Date(item.createdAt), { addSuffix: true });
   const preview = item.contentType === 'file' ? item.filePath ?? item.preview : item.preview;
+  const imageTitle =
+    typeof item.metadata.fileName === 'string' && item.metadata.fileName.trim()
+      ? item.metadata.fileName
+      : item.preview || '剪贴板图片';
 
-  const paste = () => {
-    void clipboardApi.pasteItem(item.id).then((result) => {
+  const copy = () => {
+    void clipboardApi.copyItem(item.id).then((result) => {
       if (result.success) {
+        if (result.item) {
+          upsertItem(result.item);
+        }
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1200);
       }
     });
   };
 
-  const togglePin = () => {
-    void clipboardApi.togglePin(item.id).then((updated) => {
-      const stillExists = useClipboardStore.getState().items.some((current) => current.id === item.id);
-      if (updated && stillExists) {
-        upsertItem(updated);
-      }
-    });
-  };
-
-  const toggleFavorite = () => {
-    void clipboardApi.toggleFavorite(item.id).then((updated) => {
-      const stillExists = useClipboardStore.getState().items.some((current) => current.id === item.id);
-      if (updated && stillExists) {
-        upsertItem(updated);
-      }
-    });
-  };
-
-  const deleteItem = () => {
-    void clipboardApi.deleteItem(item.id).then((result) => {
-      if (result.success) {
-        removeItem(item.id);
-      }
-    });
-  };
-
   return (
-    <aside className="detail-panel rounded-2xl border border-teal-100 bg-white/78 p-3 shadow-[0_18px_45px_rgba(15,118,110,0.10)]">
-      <div className="flex items-start gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-100 text-teal-800">
-          {iconForType(item.contentType)}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
-              {TYPE_LABELS[item.contentType]}
-            </span>
-            {item.isPinned ? <span className="rounded-full bg-orange-50 px-2 py-0.5 text-[11px] text-orange-700">已置顶</span> : null}
-            {item.isFavorite ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">已收藏</span> : null}
+    <>
+      <aside className="detail-panel flex h-full min-h-0 flex-col overflow-hidden rounded-[1.35rem] border border-slate-200 bg-white p-3">
+        <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 pb-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-teal-800">
+            {iconForType(item.contentType)}
           </div>
-          <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-800">{preview || '空内容'}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-            <span>{time}</span>
-            {size ? <span>{size}</span> : null}
-            {item.useCount > 0 ? <span>已使用 {item.useCount} 次</span> : <span>尚未使用</span>}
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">当前选择</p>
+            <p className="truncate text-sm font-semibold text-slate-950">{TYPE_LABELS[item.contentType]}</p>
           </div>
         </div>
-        {item.contentType === 'image' && imageUrl ? (
-          <img
-            src={imageUrl}
-            alt={item.preview || '剪贴板图片'}
-            className="h-20 w-20 shrink-0 rounded-xl border border-teal-100 object-cover"
-          />
-        ) : null}
-      </div>
 
-      <div className="mt-3 grid grid-cols-4 gap-2">
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          {item.contentType === 'image' && imageUrl ? (
+            <button
+              type="button"
+              className="mt-3 block w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 text-left transition hover:border-teal-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+              onClick={() => setShowViewer(true)}
+              title="点击放大图片"
+            >
+              <span className="flex h-32 w-full items-center justify-center bg-slate-100/70 p-2">
+                <img
+                  src={imageUrl}
+                  alt={imageTitle}
+                  className="max-h-full max-w-full rounded-xl object-contain"
+                />
+              </span>
+              <span className="block border-t border-slate-200 px-3 py-2 text-[11px] font-medium text-slate-500">
+                点击图片放大预览
+              </span>
+            </button>
+          ) : null}
+
+          <div className="mt-3 rounded-2xl bg-slate-50 p-3">
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">内容</p>
+            <p className="max-h-28 overflow-auto break-words text-sm font-medium leading-6 text-slate-900">
+              {preview || '空内容'}
+            </p>
+          </div>
+
+          <div className="mt-3 space-y-2 text-[11px] text-slate-500">
+            <div className="flex items-center justify-between gap-3">
+              <span>时间</span>
+              <span className="truncate text-right text-slate-700">{time}</span>
+            </div>
+            {size ? (
+              <div className="flex items-center justify-between gap-3">
+                <span>大小</span>
+                <span className="text-slate-700">{size}</span>
+              </div>
+            ) : null}
+            <div className="flex items-center justify-between gap-3">
+              <span>使用</span>
+              <span className="text-slate-700">{item.useCount > 0 ? `${item.useCount} 次` : '尚未使用'}</span>
+            </div>
+          </div>
+        </div>
+
         <Button
           size="sm"
-          className={cn('gap-1.5 bg-teal-700 hover:bg-teal-800', copied && 'bg-emerald-600')}
-          onClick={paste}
+          className={cn('mt-3 h-11 shrink-0 gap-1.5 bg-teal-700 text-sm hover:bg-teal-800', copied && 'bg-emerald-600')}
+          onClick={copy}
         >
           {copied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {copied ? '已粘贴' : '粘贴'}
+          {copied ? '已复制' : '复制'}
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5"
-          onClick={togglePin}
-        >
-          <Pin className={cn('h-3.5 w-3.5', item.isPinned && 'fill-teal-700 text-teal-700')} />
-          置顶
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5"
-          onClick={toggleFavorite}
-        >
-          <Star className={cn('h-3.5 w-3.5', item.isFavorite && 'fill-amber-500 text-amber-500')} />
-          收藏
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-1.5 text-red-600 hover:bg-red-50"
-          onClick={deleteItem}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          删除
-        </Button>
-      </div>
-    </aside>
+      </aside>
+
+      {item.contentType === 'image' && imageUrl ? (
+        <ImageViewer
+          open={showViewer}
+          imageUrl={imageUrl}
+          title={imageTitle}
+          onClose={() => setShowViewer(false)}
+          onCopy={copy}
+        />
+      ) : null}
+    </>
   );
 }

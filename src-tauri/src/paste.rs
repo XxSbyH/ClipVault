@@ -20,7 +20,7 @@ pub fn write_clipboard_and_paste(app: &AppHandle, item: &ClipboardItem) -> AppRe
     simulate_ctrl_v_after_delay(Duration::from_millis(120))
 }
 
-fn write_item_to_clipboard(app: &AppHandle, item: &ClipboardItem) -> AppResult<()> {
+pub fn write_item_to_clipboard(app: &AppHandle, item: &ClipboardItem) -> AppResult<()> {
     match item.content_type {
         ClipboardContentType::Text
         | ClipboardContentType::Url

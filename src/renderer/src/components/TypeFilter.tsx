@@ -8,7 +8,7 @@ const FILTERS: Array<{ value: FilterType; label: string; icon: JSX.Element }> = 
   { value: 'text', label: '文本', icon: <FileText className="h-3.5 w-3.5" /> },
   { value: 'image', label: '图片', icon: <ImageIcon className="h-3.5 w-3.5" /> },
   { value: 'code', label: '代码', icon: <Code2 className="h-3.5 w-3.5" /> },
-  { value: 'url', label: 'URL', icon: <Link2 className="h-3.5 w-3.5" /> },
+  { value: 'url', label: '链接', icon: <Link2 className="h-3.5 w-3.5" /> },
   { value: 'favorite', label: '收藏', icon: <Star className="h-3.5 w-3.5" /> }
 ];
 
@@ -27,7 +27,7 @@ export function TypeFilter(): JSX.Element {
   };
 
   return (
-    <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+    <div className="filter-strip flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 p-1">
       {FILTERS.map((filter) => {
         const selected = selectedType === filter.value;
         return (
@@ -35,10 +35,10 @@ export function TypeFilter(): JSX.Element {
             key={filter.value}
             type="button"
             className={cn(
-              'flex h-9 items-center justify-center gap-1.5 rounded-full border px-2 text-xs font-bold transition',
+              'flex h-8 min-w-[76px] shrink-0 items-center justify-center gap-1.5 rounded-full border px-2 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400',
               selected
-                ? 'border-teal-700 bg-teal-700 text-white shadow-[0_8px_20px_rgba(13,148,136,0.25)]'
-                : 'border-teal-100 bg-white/70 text-teal-900 hover:border-teal-300 hover:bg-teal-50'
+                ? 'border-teal-700 bg-white text-teal-900 shadow-sm'
+                : 'border-transparent bg-transparent text-slate-500 hover:bg-white hover:text-slate-900'
             )}
             aria-pressed={selected}
             onClick={() => setSelectedType(filter.value)}
@@ -48,7 +48,7 @@ export function TypeFilter(): JSX.Element {
             <span
               className={cn(
                 'rounded-full px-1.5 py-0.5 text-[10px]',
-                selected ? 'bg-white/18 text-white' : 'bg-teal-50 text-teal-700'
+                selected ? 'bg-teal-50 text-teal-800' : 'bg-white text-slate-500'
               )}
             >
               {countByType[filter.value]}

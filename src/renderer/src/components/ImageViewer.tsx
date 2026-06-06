@@ -47,7 +47,7 @@ export function ImageViewer({ open, imageUrl, title, onClose, onCopy }: ImageVie
           }}
         />
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-950/70 px-4 py-1.5 text-xs font-semibold text-white">
-          点击图片粘贴，点击空白关闭
+          点击图片复制，点击空白关闭
         </div>
       </div>
       <div className="pointer-events-none absolute right-4 top-4 rounded-full bg-white/12 px-3 py-1 text-xs text-white/80">

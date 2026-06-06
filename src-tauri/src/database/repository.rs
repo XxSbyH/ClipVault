@@ -13,7 +13,7 @@ use crate::{
     errors::AppResult,
     models::{
         AppSettings, BlacklistApp, ClipboardContentType, ClipboardInsertInput, ClipboardItem,
-        HotkeySettings, HotkeySettingsPatch, ImageCompression, WheelShortcutModifier,
+        HotkeySettings, HotkeySettingsPatch, ImageCompression, ThemeMode, WheelShortcutModifier,
         WheelShortcutScope,
     },
 };
@@ -196,6 +196,17 @@ impl Repository {
     pub fn search_items(&self, query: &str, limit: i64) -> AppResult<Vec<ClipboardItem>> {
         let conn = self.conn()?;
         let fts_query = query.replace('"', "\"\"");
+        let like = format!("%{query}%");
+        let like_search = || {
+            query_items(
+                &conn,
+                "SELECT * FROM clipboard_items
+                 WHERE content LIKE ?1 OR preview LIKE ?1
+                 ORDER BY is_pinned DESC, created_at DESC, id DESC
+                 LIMIT ?2",
+                params![like, limit],
+            )
+        };
         let fts = query_items(
             &conn,
             "SELECT clipboard_items.* FROM clipboard_items
@@ -207,18 +218,8 @@ impl Repository {
         );
 
         match fts {
-            Ok(items) => Ok(items),
-            Err(_) => {
-                let like = format!("%{query}%");
-                query_items(
-                    &conn,
-                    "SELECT * FROM clipboard_items
-                     WHERE content LIKE ?1 OR preview LIKE ?1
-                     ORDER BY is_pinned DESC, created_at DESC, id DESC
-                     LIMIT ?2",
-                    params![like, limit],
-                )
-            }
+            Ok(items) if !items.is_empty() => Ok(items),
+            _ => like_search(),
         }
     }
 
@@ -256,6 +257,7 @@ impl Repository {
         upsert_setting_locked(&tx, "enableBlacklist", &settings.enable_blacklist, now)?;
         upsert_setting_locked(&tx, "textLimitKb", &settings.text_limit_kb, now)?;
         upsert_setting_locked(&tx, "imageCompression", &settings.image_compression, now)?;
+        upsert_setting_locked(&tx, "themeMode", &settings.theme_mode, now)?;
         upsert_setting_locked(&tx, "launchOnStartup", &settings.launch_on_startup, now)?;
         upsert_setting_locked(
             &tx,
@@ -469,6 +471,7 @@ fn serialize_setting_value(key: &str, value: Value) -> AppResult<String> {
         "enableBlacklist" => serialize_typed_setting::<bool>(key, value),
         "textLimitKb" => serialize_typed_setting::<u32>(key, value),
         "imageCompression" => serialize_typed_setting::<ImageCompression>(key, value),
+        "themeMode" => serialize_typed_setting::<ThemeMode>(key, value),
         "launchOnStartup" => serialize_typed_setting::<bool>(key, value),
         "wheelShortcutEnabled" => serialize_typed_setting::<bool>(key, value),
         "wheelShortcutModifier" => serialize_typed_setting::<WheelShortcutModifier>(key, value),
@@ -496,6 +499,7 @@ fn apply_setting_row(settings: &mut AppSettings, key: &str, value: &str) {
         "imageCompression" => {
             apply_json::<ImageCompression>(value, &mut settings.image_compression)
         }
+        "themeMode" => apply_json::<ThemeMode>(value, &mut settings.theme_mode),
         "launchOnStartup" => apply_json(value, &mut settings.launch_on_startup),
         "wheelShortcutEnabled" => apply_json(value, &mut settings.wheel_shortcut_enabled),
         "wheelShortcutModifier" => {
@@ -678,7 +682,7 @@ mod tests {
 
     use crate::models::{
         AppSettings, ClipboardContentType, ClipboardInsertInput, HotkeySettingsPatch,
-        ImageCompression,
+        ImageCompression, ThemeMode,
     };
 
     use super::Repository;
@@ -842,6 +846,20 @@ mod tests {
     }
 
     #[test]
+    fn search_items_falls_back_to_like_for_partial_text() {
+        let repo = repo();
+        repo.insert_clipboard_item(text_input("alpha needle", "hash-alpha"))
+            .unwrap();
+        repo.insert_clipboard_item(text_input("beta", "hash-beta"))
+            .unwrap();
+
+        let results = repo.search_items("lpha nee", 10).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content.as_deref(), Some("alpha needle"));
+    }
+
+    #[test]
     fn get_history_tolerates_legacy_rows_with_null_display_fields() {
         let repo = repo();
         {
@@ -874,6 +892,7 @@ mod tests {
                 "INSERT INTO settings (key, value, updated_at)
                  VALUES ('retentionDays', '30', 1),
                         ('imageCompression', '\"medium\"', 1),
+                        ('themeMode', '\"dark\"', 1),
                         ('enableSensitiveFilter', 'false', 1)",
                 [],
             )
@@ -883,6 +902,7 @@ mod tests {
         let settings = repo.get_settings().unwrap();
         assert_eq!(settings.retention_days, 30);
         assert_eq!(settings.image_compression, ImageCompression::Medium);
+        assert_eq!(settings.theme_mode, ThemeMode::Dark);
         assert!(!settings.enable_sensitive_filter);
 
         let updated = repo.update_setting("retentionDays", json!(45)).unwrap();
@@ -919,11 +939,17 @@ mod tests {
             ImageCompression::High
         );
 
+        let theme_error = repo
+            .update_setting("themeMode", json!("sepia"))
+            .unwrap_err();
+        assert!(theme_error.to_string().contains("themeMode"));
+        assert_eq!(repo.get_settings().unwrap().theme_mode, ThemeMode::System);
+
         let stored_count: i64 = repo
             .conn()
             .unwrap()
             .query_row(
-                "SELECT COUNT(*) FROM settings WHERE key IN ('retentionDays', 'imageCompression')",
+                "SELECT COUNT(*) FROM settings WHERE key IN ('retentionDays', 'imageCompression', 'themeMode')",
                 [],
                 |row| row.get(0),
             )

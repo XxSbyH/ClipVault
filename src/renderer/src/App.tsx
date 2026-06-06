@@ -5,6 +5,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { useClipboardData } from '@/hooks/useClipboard';
 import { useSearch } from '@/hooks/useSearch';
+import { useThemeMode } from '@/hooks/useThemeMode';
 import { clipboardApi } from '@/lib/tauriApi';
 
 type SettingsTab = 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about';
@@ -12,6 +13,7 @@ type SettingsTab = 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about';
 export default function App(): JSX.Element {
   useClipboardData();
   useSearch();
+  useThemeMode();
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');

@@ -16,6 +16,7 @@ type ClearHistoryCommandResult = { revision: number; deleted: number };
 type PasteResult = {
   success: boolean;
   message?: string;
+  item?: ClipboardItem | null;
 };
 type HotkeyConflictReport = {
   hasConflicts: boolean;
@@ -120,6 +121,17 @@ export const clipboardApi: ClipboardApi = {
         return { success: true };
       }
       return { success: false, error: result.message || 'paste failed' };
+    } catch (error) {
+      return { success: false, error: errorMessage(error) };
+    }
+  },
+  async copyItem(id) {
+    try {
+      const result = await invoke<PasteResult>('copy_item', { id });
+      if (result.success) {
+        return { success: true, item: result.item ?? undefined };
+      }
+      return { success: false, error: result.message || 'copy failed' };
     } catch (error) {
       return { success: false, error: errorMessage(error) };
     }

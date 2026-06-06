@@ -6,26 +6,44 @@ import { EmptyState } from '@/components/EmptyState';
 import { clipboardApi } from '@/lib/tauriApi';
 import { useClipboardStore } from '@/store/clipboardStore';
 
-const ITEM_HEIGHT = 106;
+const ITEM_HEIGHT = 78;
 
 interface RowData {
   items: ClipboardItemType[];
   selectedId: number | null;
-  onPaste: (id: number) => void;
+  onCopy: (id: number) => void;
   onTogglePin: (id: number) => void;
   onToggleFavorite: (id: number) => void;
   onDelete: (id: number) => void;
   onSelect: (id: number) => void;
 }
 
-function filterItems(items: ClipboardItemType[], type: ReturnType<typeof useClipboardStore.getState>['selectedType']) {
+function itemMatchesQuery(item: ClipboardItemType, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return true;
+  }
+  return [item.preview, item.content, item.filePath, item.metadata.fileName]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .some((value) => value.toLowerCase().includes(needle));
+}
+
+function filterItems(
+  items: ClipboardItemType[],
+  type: ReturnType<typeof useClipboardStore.getState>['selectedType'],
+  query: string
+) {
+  const searchedItems = query.trim() ? items.filter((item) => itemMatchesQuery(item, query)) : items;
+  if (query.trim()) {
+    return searchedItems;
+  }
   if (type === 'all') {
-    return items;
+    return searchedItems;
   }
   if (type === 'favorite') {
-    return items.filter((item) => item.isFavorite);
+    return searchedItems.filter((item) => item.isFavorite);
   }
-  return items.filter((item) => item.contentType === type);
+  return searchedItems.filter((item) => item.contentType === type);
 }
 
 function Row({ index, style, data }: ListChildComponentProps<RowData>): JSX.Element {
@@ -38,7 +56,7 @@ function Row({ index, style, data }: ListChildComponentProps<RowData>): JSX.Elem
       <ClipboardItem
         item={item}
         selected={data.selectedId === item.id}
-        onPaste={data.onPaste}
+        onCopy={data.onCopy}
         onTogglePin={data.onTogglePin}
         onToggleFavorite={data.onToggleFavorite}
         onDelete={data.onDelete}
@@ -65,17 +83,20 @@ function shouldIgnoreGlobalShortcut(event: KeyboardEvent): boolean {
 
 export function ClipboardList(): JSX.Element {
   const items = useClipboardStore((state) => state.items);
+  const searchQuery = useClipboardStore((state) => state.searchQuery);
   const selectedType = useClipboardStore((state) => state.selectedType);
   const selectedItemId = useClipboardStore((state) => state.selectedItemId);
   const setSelectedItemId = useClipboardStore((state) => state.setSelectedItemId);
   const setItems = useClipboardStore((state) => state.setItems);
   const upsertItem = useClipboardStore((state) => state.upsertItem);
   const removeItem = useClipboardStore((state) => state.removeItem);
-  const [height, setHeight] = useState(420);
+  const [height, setHeight] = useState(360);
   const listRef = useRef<List<RowData>>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const copyQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const copyRequestSeqRef = useRef(0);
 
-  const filteredItems = useMemo(() => filterItems(items, selectedType), [items, selectedType]);
+  const filteredItems = useMemo(() => filterItems(items, selectedType, searchQuery), [items, searchQuery, selectedType]);
 
   const selectedIndex = useMemo(
     () => filteredItems.findIndex((item) => item.id === selectedItemId),
@@ -85,7 +106,7 @@ export function ClipboardList(): JSX.Element {
   useEffect(() => {
     const measure = () => {
       const measured = containerRef.current?.clientHeight ?? 0;
-      setHeight(Math.max(260, measured || window.innerHeight - 390));
+      setHeight(Math.max(260, measured || window.innerHeight - 300));
     };
     measure();
     const resizeObserver =
@@ -106,9 +127,26 @@ export function ClipboardList(): JSX.Element {
     void clipboardApi.getHistory(300).then(setItems);
   }, [setItems]);
 
-  const onPaste = useCallback((id: number) => {
-    void clipboardApi.pasteItem(id);
-  }, []);
+  const onCopy = useCallback(
+    (id: number) => {
+      const seq = copyRequestSeqRef.current + 1;
+      copyRequestSeqRef.current = seq;
+      setSelectedItemId(id);
+      copyQueueRef.current = copyQueueRef.current.catch(() => undefined).then(async () => {
+        if (seq !== copyRequestSeqRef.current) {
+          return;
+        }
+        const result = await clipboardApi.copyItem(id);
+        if (result.success && result.item) {
+          upsertItem(result.item);
+          if (seq === copyRequestSeqRef.current) {
+            setSelectedItemId(result.item.id);
+          }
+        }
+      });
+    },
+    [setSelectedItemId, upsertItem]
+  );
 
   const onTogglePin = useCallback(
     (id: number) => {
@@ -206,7 +244,7 @@ export function ClipboardList(): JSX.Element {
       }
       if (event.key === 'Enter' && selectedItemId) {
         event.preventDefault();
-        onPaste(selectedItemId);
+        onCopy(selectedItemId);
       }
       if (event.key === 'Delete' && selectedItemId) {
         event.preventDefault();
@@ -224,7 +262,7 @@ export function ClipboardList(): JSX.Element {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [filteredItems, onDelete, onPaste, onToggleFavorite, onTogglePin, selectedIndex, selectedItemId, setSelectedItemId]);
+  }, [filteredItems, onCopy, onDelete, onToggleFavorite, onTogglePin, selectedIndex, selectedItemId, setSelectedItemId]);
 
   return (
     <div
@@ -243,7 +281,7 @@ export function ClipboardList(): JSX.Element {
           itemData={{
             items: filteredItems,
             selectedId: selectedItemId,
-            onPaste,
+            onCopy,
             onTogglePin,
             onToggleFavorite,
             onDelete,

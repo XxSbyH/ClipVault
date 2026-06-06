@@ -14,23 +14,26 @@
       {
         "label": "main",
         "title": "ClipVault",
-        "width": 600,
-        "height": 800,
-        "minWidth": 520,
-        "minHeight": 640,
+        "width": 860,
+        "height": 700,
+        "minWidth": 760,
+        "minHeight": 620,
         "decorations": false
       },
       {
         "label": "hud",
         "title": "ClipVault HUD",
         "url": "hud.html",
-        "width": 420,
-        "height": 96,
+        "width": 440,
+        "height": 64,
         "visible": false,
         "decorations": false,
+        "resizable": false,
+        "focusable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "transparent": true
+        "transparent": true,
+        "shadow": false
       }
     ],
     "security": {

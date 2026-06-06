@@ -52,6 +52,7 @@ const defaultSettings: AppSettings = {
   enableBlacklist: true,
   textLimitKb: 100,
   imageCompression: 'high',
+  themeMode: 'system',
   launchOnStartup: false,
   wheelShortcutEnabled: true,
   wheelShortcutModifier: 'ctrl',
@@ -118,6 +119,17 @@ describe('SettingsPanel', () => {
 
     await waitFor(() => {
       expect(updateSettingMock).toHaveBeenCalledWith('enableSensitiveFilter', false);
+    });
+  });
+
+  it('updates the theme mode from general settings', async () => {
+    renderPanel('general');
+
+    const darkOption = await screen.findByRole('button', { name: '主题模式：暗色' });
+    fireEvent.click(darkOption);
+
+    await waitFor(() => {
+      expect(updateSettingMock).toHaveBeenCalledWith('themeMode', 'dark');
     });
   });
 

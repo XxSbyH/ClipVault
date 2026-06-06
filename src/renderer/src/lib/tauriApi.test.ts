@@ -87,6 +87,23 @@ describe('clipboardApi Tauri adapter', () => {
     expect(invokeMock).toHaveBeenCalledWith('paste_item', { id: 3 });
   });
 
+  it('maps copy_item success with the updated item', async () => {
+    const { clipboardApi } = await import('./tauriApi');
+    const item = makeItem(9);
+    invokeMock.mockResolvedValueOnce({
+      success: true,
+      message: 'copied',
+      item,
+      revision: 2
+    });
+
+    await expect(clipboardApi.copyItem(9)).resolves.toEqual({
+      success: true,
+      item
+    });
+    expect(invokeMock).toHaveBeenCalledWith('copy_item', { id: 9 });
+  });
+
   it('maps clear_history returned deleted count to old result shape', async () => {
     const { clipboardApi } = await import('./tauriApi');
     invokeMock.mockResolvedValueOnce({ revision: 4, deleted: 2 });

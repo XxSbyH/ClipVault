@@ -255,7 +255,21 @@ fn register_shortcut(app: &AppHandle, accelerator: &str, action: HotkeyAction) -
 fn handle_hotkey_action(app: &AppHandle, action: HotkeyAction) {
     match action {
         HotkeyAction::OpenPanel => {
-            let _ = windows::show_main_window(app);
+            if windows::is_main_window_visible(app) {
+                let _ = windows::hide_main_window(app);
+                commands::emit_hud_notification(
+                    app,
+                    HudPayload::panel("控制面板", "已隐藏，Ctrl+Shift+V 可再次唤起"),
+                );
+            } else {
+                if windows::show_main_window(app).is_ok() {
+                    commands::emit_hud_notification(
+                        app,
+                        HudPayload::panel("控制面板", "已唤起，Enter 复制当前选择"),
+                    );
+                    let _ = windows::focus_main_window(app);
+                }
+            }
         }
         HotkeyAction::Search => {
             let _ = windows::show_main_window(app);
@@ -306,13 +320,10 @@ fn quick_paste(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()>
         QuickPasteDirection::Older => HudDirection::Prev,
         QuickPasteDirection::Newer => HudDirection::Next,
     };
-    let payload = HudPayload {
-        direction: hud_direction,
-        content_type: item.content_type,
-        text: item.preview.clone(),
-    };
-    let _ = windows::show_hud_window(app);
-    let _ = app.emit(events::HUD_SHOW, &payload);
+    commands::emit_hud_notification(
+        app,
+        HudPayload::quick_paste(hud_direction, item.content_type, item.preview.clone()),
+    );
 
     let result = commands::paste_item_impl(state.inner(), item.id, |item| {
         paste::write_clipboard_and_paste(app, item)

@@ -56,6 +56,7 @@ pub fn run() {
             commands::get_history_revision,
             commands::search_items,
             commands::paste_item,
+            commands::copy_item,
             commands::delete_item,
             commands::toggle_pin,
             commands::toggle_favorite,

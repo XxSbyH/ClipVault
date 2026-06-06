@@ -86,6 +86,14 @@ pub enum ImageCompression {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum WheelShortcutModifier {
     Ctrl,
     Alt,
@@ -110,6 +118,7 @@ pub struct AppSettings {
     pub enable_blacklist: bool,
     pub text_limit_kb: u32,
     pub image_compression: ImageCompression,
+    pub theme_mode: ThemeMode,
     pub launch_on_startup: bool,
     pub wheel_shortcut_enabled: bool,
     pub wheel_shortcut_modifier: WheelShortcutModifier,
@@ -125,6 +134,7 @@ impl Default for AppSettings {
             enable_blacklist: true,
             text_limit_kb: 100,
             image_compression: ImageCompression::High,
+            theme_mode: ThemeMode::System,
             launch_on_startup: false,
             wheel_shortcut_enabled: true,
             wheel_shortcut_modifier: WheelShortcutModifier::Ctrl,
@@ -204,13 +214,64 @@ pub enum HudDirection {
     Next,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HudKind {
+    #[default]
+    QuickPaste,
+    Copy,
+    Panel,
+    Status,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HudPayload {
-    pub direction: HudDirection,
+    #[serde(default)]
+    pub kind: HudKind,
+    pub title: String,
     #[serde(rename = "type")]
-    pub content_type: ClipboardContentType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<ClipboardContentType>,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<HudDirection>,
+}
+
+impl HudPayload {
+    pub fn quick_paste(
+        direction: HudDirection,
+        content_type: ClipboardContentType,
+        text: String,
+    ) -> Self {
+        Self {
+            kind: HudKind::QuickPaste,
+            title: "快速粘贴".to_string(),
+            content_type: Some(content_type),
+            text,
+            direction: Some(direction),
+        }
+    }
+
+    pub fn copy_success(content_type: ClipboardContentType, text: String) -> Self {
+        Self {
+            kind: HudKind::Copy,
+            title: "复制成功".to_string(),
+            content_type: Some(content_type),
+            text,
+            direction: None,
+        }
+    }
+
+    pub fn panel(title: &str, text: &str) -> Self {
+        Self {
+            kind: HudKind::Panel,
+            title: title.to_string(),
+            content_type: None,
+            text: text.to_string(),
+            direction: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +339,7 @@ mod tests {
         assert!(settings.enable_blacklist);
         assert_eq!(settings.text_limit_kb, 100);
         assert_eq!(settings.image_compression, ImageCompression::High);
+        assert_eq!(settings.theme_mode, ThemeMode::System);
         assert!(!settings.launch_on_startup);
         assert!(settings.wheel_shortcut_enabled);
         assert_eq!(

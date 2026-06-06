@@ -231,6 +231,38 @@ where
     })
 }
 
+pub fn copy_item_impl<F>(state: &AppState, id: i64, copy: F) -> AppResult<PasteResult>
+where
+    F: FnOnce(&ClipboardItem) -> AppResult<()>,
+{
+    let Some(item) = state.repository().get_item_by_id(id)? else {
+        return Ok(PasteResult {
+            success: false,
+            item: None,
+            revision: state.history_revision(),
+            message: "item not found".to_string(),
+        });
+    };
+
+    if let Err(error) = copy(&item) {
+        return Ok(PasteResult {
+            success: false,
+            item: Some(item),
+            revision: state.history_revision(),
+            message: error.to_string(),
+        });
+    }
+
+    let item = state.repository().increment_use_stats(id)?;
+    let revision = state.bump_history_revision();
+    Ok(PasteResult {
+        success: true,
+        item: Some(item),
+        revision,
+        message: "copied".to_string(),
+    })
+}
+
 pub fn delete_item_impl(state: &AppState, id: i64) -> AppResult<u64> {
     if state.repository().get_item_by_id(id)?.is_none() {
         return Err(AppError::from(format!("clipboard item {id} not found")));
@@ -424,11 +456,11 @@ pub fn build_hotkey_settings_candidate(
 }
 
 pub fn test_hud_impl() -> HudPayload {
-    HudPayload {
-        direction: HudDirection::Next,
-        content_type: ClipboardContentType::Text,
-        text: "HUD stub".to_string(),
-    }
+    HudPayload::quick_paste(
+        HudDirection::Next,
+        ClipboardContentType::Text,
+        "HUD stub".to_string(),
+    )
 }
 
 #[tauri::command]
@@ -460,6 +492,23 @@ pub fn paste_item(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppRes
     })?;
     if result.success {
         emit_history_revision(&app, result.revision);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn copy_item(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<PasteResult> {
+    let result = copy_item_impl(state.inner(), id, |item| {
+        paste::write_item_to_clipboard(&app, item)
+    })?;
+    if result.success {
+        emit_history_revision(&app, result.revision);
+        if let Some(item) = result.item.as_ref() {
+            emit_hud_notification(
+                &app,
+                HudPayload::copy_success(item.content_type, item.preview.clone()),
+            );
+        }
     }
     Ok(result)
 }
@@ -620,10 +669,18 @@ pub fn minimize_window(window: Window) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn hide_window(window: Window) -> AppResult<()> {
+pub fn hide_window(app: AppHandle, window: Window) -> AppResult<()> {
+    let label = window.label().to_string();
     window
         .hide()
-        .map_err(|err| AppError::from(format!("failed to hide window: {err}")))
+        .map_err(|err| AppError::from(format!("failed to hide window: {err}")))?;
+    if label == "main" {
+        emit_hud_notification(
+            &app,
+            HudPayload::panel("控制面板", "已隐藏，Ctrl+Shift+V 可再次唤起"),
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -634,9 +691,13 @@ pub fn test_monitoring(state: State<'_, AppState>) -> MonitoringStatus {
 #[tauri::command]
 pub fn test_hud(app: AppHandle) -> HudPayload {
     let payload = test_hud_impl();
-    let _ = windows::show_hud_window(&app);
-    let _ = app.emit(events::HUD_SHOW, &payload);
+    emit_hud_notification(&app, payload.clone());
     payload
+}
+
+pub fn emit_hud_notification(app: &AppHandle, payload: HudPayload) {
+    let _ = windows::show_hud_window(app);
+    let _ = app.emit(events::HUD_SHOW, &payload);
 }
 
 fn emit_history_revision(app: &AppHandle, revision: u64) {
@@ -952,6 +1013,45 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.message.contains("paste failed"));
+        assert_eq!(result.revision, 0);
+        assert_eq!(stored.use_count, 0);
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_copy_item_updates_use_stats_after_successful_copy() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha", "hash-alpha"))
+            .unwrap();
+
+        let result = super::copy_item_impl(&state, item.id, |_| Ok(())).unwrap();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.message, "copied");
+        assert_eq!(result.item.as_ref().map(|item| item.use_count), Some(1));
+        assert_eq!(result.revision, 1);
+        assert_eq!(stored.use_count, 1);
+        assert!(stored.last_used_at.is_some());
+        assert_eq!(state.history_revision(), 1);
+    }
+
+    #[test]
+    fn commands_copy_item_failure_does_not_update_use_stats() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha", "hash-alpha"))
+            .unwrap();
+
+        let result =
+            super::copy_item_impl(&state, item.id, |_| Err(AppError::from("copy failed"))).unwrap();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(!result.success);
+        assert!(result.message.contains("copy failed"));
         assert_eq!(result.revision, 0);
         assert_eq!(stored.use_count, 0);
         assert_eq!(state.history_revision(), 0);
