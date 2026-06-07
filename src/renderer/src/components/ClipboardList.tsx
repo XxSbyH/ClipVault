@@ -4,6 +4,7 @@ import type { ClipboardItem as ClipboardItemType } from '@shared/types';
 import { ClipboardItem } from '@/components/ClipboardItem';
 import { EmptyState } from '@/components/EmptyState';
 import { clipboardApi } from '@/lib/tauriApi';
+import { itemMatchesSearchQuery } from '@/lib/search';
 import { useClipboardStore } from '@/store/clipboardStore';
 
 const ITEM_HEIGHT = 78;
@@ -18,22 +19,12 @@ interface RowData {
   onSelect: (id: number) => void;
 }
 
-function itemMatchesQuery(item: ClipboardItemType, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (!needle) {
-    return true;
-  }
-  return [item.preview, item.content, item.filePath, item.metadata.fileName]
-    .filter((value): value is string => typeof value === 'string' && value.length > 0)
-    .some((value) => value.toLowerCase().includes(needle));
-}
-
 function filterItems(
   items: ClipboardItemType[],
   type: ReturnType<typeof useClipboardStore.getState>['selectedType'],
   query: string
 ) {
-  const searchedItems = query.trim() ? items.filter((item) => itemMatchesQuery(item, query)) : items;
+  const searchedItems = query.trim() ? items.filter((item) => itemMatchesSearchQuery(item, query)) : items;
   if (query.trim()) {
     return searchedItems;
   }

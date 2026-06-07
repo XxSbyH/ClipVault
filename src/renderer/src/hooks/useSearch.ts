@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { clipboardApi } from '@/lib/tauriApi';
+import { parseRegexQuery } from '@/lib/search';
 import { useClipboardStore } from '@/store/clipboardStore';
 
 export function useSearch(): void {
@@ -9,7 +10,10 @@ export function useSearch(): void {
   useEffect(() => {
     const timer = setTimeout(() => {
       if (query.trim()) {
-        void clipboardApi.searchItems(query).then(setItems);
+        const request = parseRegexQuery(query)
+          ? clipboardApi.getHistory(300)
+          : clipboardApi.searchItems(query);
+        void request.then(setItems);
       } else {
         void clipboardApi.getHistory(300).then(setItems);
       }

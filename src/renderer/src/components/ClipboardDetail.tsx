@@ -7,6 +7,7 @@ import {
   FileText,
   Folder,
   Image as ImageIcon,
+  Keyboard,
   Link2,
   Mail,
   Palette
@@ -59,6 +60,23 @@ function formatFileSize(value: unknown): string | null {
     return `${(value / 1024).toFixed(1)} KB`;
   }
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getDetailHint(item: ClipboardItem): string {
+  switch (item.contentType) {
+    case 'image':
+      return '点击图片可放大预览';
+    case 'file':
+      return '仅保存路径与元数据';
+    case 'url':
+      return 'Enter 复制链接';
+    case 'code':
+      return 'Enter 复制代码片段';
+    case 'color':
+      return 'Enter 复制颜色值';
+    default:
+      return 'Enter 复制文本';
+  }
 }
 
 export function ClipboardDetail(): JSX.Element {
@@ -117,6 +135,7 @@ export function ClipboardDetail(): JSX.Element {
   const size = formatFileSize(item.metadata.fileSize ?? item.metadata.compressedSize);
   const time = formatDistanceToNow(new Date(item.createdAt), { addSuffix: true });
   const preview = item.contentType === 'file' ? item.filePath ?? item.preview : item.preview;
+  const detailHint = getDetailHint(item);
   const imageTitle =
     typeof item.metadata.fileName === 'string' && item.metadata.fileName.trim()
       ? item.metadata.fileName
@@ -189,6 +208,16 @@ export function ClipboardDetail(): JSX.Element {
             <div className="flex items-center justify-between gap-3">
               <span>使用</span>
               <span className="text-slate-700">{item.useCount > 0 ? `${item.useCount} 次` : '尚未使用'}</span>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-100 bg-white/85 px-3 py-2.5 text-[11px] font-medium text-slate-500">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-slate-600">{detailHint}</span>
+              <span className="flex shrink-0 items-center gap-1.5 text-slate-400">
+                <Keyboard className="h-3.5 w-3.5 text-slate-400" />
+                Delete / Ctrl+D
+              </span>
             </div>
           </div>
         </div>

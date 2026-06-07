@@ -4,13 +4,13 @@ import { clipboardApi } from '@/lib/tauriApi';
 
 export function TitleBar(): JSX.Element {
   return (
-    <div className="drag-region relative z-20 flex h-10 items-center justify-between px-4 pt-2">
-      <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+    <div className="drag-region relative z-20 flex h-12 items-center justify-between px-4">
+      <div className="flex h-8 items-center gap-2 rounded-full border border-slate-200 bg-white/95 px-3 text-xs font-semibold text-slate-700 shadow-sm">
         <ClipboardList className="h-3.5 w-3.5 text-teal-700" />
         <span>ClipVault</span>
       </div>
 
-      <div className="no-drag flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1">
+      <div className="no-drag flex items-center gap-1 rounded-full border border-slate-200 bg-white/95 p-1 shadow-sm">
         <Button
           variant="ghost"
           size="icon"

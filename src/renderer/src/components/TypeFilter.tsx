@@ -27,7 +27,7 @@ export function TypeFilter(): JSX.Element {
   };
 
   return (
-    <div className="filter-strip flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 p-1">
+    <div className="filter-strip flex w-full min-w-0 gap-1 overflow-x-auto rounded-xl bg-transparent">
       {FILTERS.map((filter) => {
         const selected = selectedType === filter.value;
         return (
@@ -35,10 +35,10 @@ export function TypeFilter(): JSX.Element {
             key={filter.value}
             type="button"
             className={cn(
-              'flex h-8 min-w-[76px] shrink-0 items-center justify-center gap-1.5 rounded-full border px-2 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400',
+              'flex h-9 min-w-[58px] shrink-0 items-center justify-center gap-1 rounded-xl border px-2 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400',
               selected
                 ? 'border-teal-700 bg-white text-teal-900 shadow-sm'
-                : 'border-transparent bg-transparent text-slate-500 hover:bg-white hover:text-slate-900'
+                : 'border-transparent bg-white/55 text-slate-500 hover:bg-white hover:text-slate-900'
             )}
             aria-pressed={selected}
             onClick={() => setSelectedType(filter.value)}
@@ -47,7 +47,7 @@ export function TypeFilter(): JSX.Element {
             <span>{filter.label}</span>
             <span
               className={cn(
-                'rounded-full px-1.5 py-0.5 text-[10px]',
+                'rounded-full px-1 py-0.5 text-[10px]',
                 selected ? 'bg-teal-50 text-teal-800' : 'bg-white text-slate-500'
               )}
             >

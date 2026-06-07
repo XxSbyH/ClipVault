@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="ClipVault 主界面宣传预览">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f7fbf8"/>
+      <stop offset="1" stop-color="#eefaf6"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="90" y1="184" x2="1190" y2="650" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f8fffc"/>
+    </linearGradient>
+    <linearGradient id="photo" x1="880" y1="448" x2="1098" y2="570" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18a7d8"/>
+      <stop offset="0.5" stop-color="#20c7b4"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="-8%" y="-8%" width="116%" height="126%">
+      <feDropShadow dx="0" dy="26" stdDeviation="24" flood-color="#0a3f3b" flood-opacity="0.16"/>
+    </filter>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0v28" fill="none" stroke="#cfe6e1" stroke-opacity="0.42"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <rect width="1280" height="720" fill="url(#grid)"/>
+  <circle cx="1124" cy="102" r="156" fill="#d8fff7" opacity="0.72"/>
+  <circle cx="128" cy="666" r="205" fill="#f97316" opacity="0.08"/>
+
+  <g transform="translate(92 54)">
+    <text x="0" y="0" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="900" letter-spacing="5">CLIPVAULT</text>
+    <text x="0" y="48" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="40" font-weight="900">剪贴板工作台</text>
+    <text x="0" y="84" fill="#58736f" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="20" font-weight="700">搜索、分类、预览和再次复制，一屏完成。</text>
+  </g>
+
+  <g transform="translate(840 62)">
+    <rect x="0" y="0" width="124" height="36" rx="18" fill="#e9fffa" stroke="#bff2ea"/>
+    <text x="31" y="24" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">Tauri 2</text>
+    <rect x="140" y="0" width="136" height="36" rx="18" fill="#fff3df" stroke="#ffe0b8"/>
+    <text x="174" y="24" fill="#bd5b0b" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">小体积</text>
+    <rect x="292" y="0" width="136" height="36" rx="18" fill="#e9fffa" stroke="#bff2ea"/>
+    <text x="326" y="24" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">本地优先</text>
+  </g>
+
+  <g transform="translate(90 184)" filter="url(#soft-shadow)">
+    <rect x="0" y="0" width="1100" height="466" rx="38" fill="url(#panel)" stroke="#d7e7e3" stroke-width="2"/>
+    <rect x="28" y="22" width="1044" height="58" rx="29" fill="#f8fbfa"/>
+    <rect x="54" y="35" width="140" height="32" rx="16" fill="#ffffff" stroke="#d7e7e3"/>
+    <text x="89" y="56" fill="#334155" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13" font-weight="900">ClipVault</text>
+    <circle cx="1012" cy="51" r="18" fill="#ffffff" stroke="#d7e7e3"/>
+    <circle cx="1056" cy="51" r="18" fill="#ffffff" stroke="#d7e7e3"/>
+    <path d="M1006 51h12M1051 46l10 10M1061 46l-10 10" stroke="#0f172a" stroke-width="2.2" stroke-linecap="round"/>
+
+    <g transform="translate(54 108)">
+      <rect x="0" y="0" width="992" height="322" rx="30" fill="#ffffff" stroke="#d7e7e3"/>
+
+      <rect x="28" y="24" width="112" height="36" rx="18" fill="#e9fffa" stroke="#bff2ea"/>
+      <text x="64" y="48" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">监听中</text>
+      <text x="164" y="48" fill="#64748b" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="800">历史 16</text>
+      <text x="232" y="48" fill="#64748b" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="800">收藏 0</text>
+
+      <rect x="28" y="82" width="500" height="48" rx="18" fill="#ffffff" stroke="#d7e7e3"/>
+      <circle cx="55" cy="106" r="8" fill="none" stroke="#8aa6a1" stroke-width="3"/>
+      <path d="M61 112l8 8" stroke="#8aa6a1" stroke-width="3" stroke-linecap="round"/>
+      <text x="84" y="112" fill="#9aacaa" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="800">输入要搜索的内容</text>
+      <text x="364" y="112" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">/token|key/i</text>
+
+      <g transform="translate(552 82)">
+        <rect x="0" y="0" width="92" height="48" rx="18" fill="#0f8f83"/>
+        <text x="32" y="30" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">全部</text>
+        <rect x="108" y="0" width="92" height="48" rx="18" fill="#f8fbfa"/>
+        <text x="138" y="30" fill="#58736f" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">文本</text>
+        <rect x="216" y="0" width="92" height="48" rx="18" fill="#f8fbfa"/>
+        <text x="246" y="30" fill="#58736f" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">图片</text>
+      </g>
+
+      <g transform="translate(28 152)">
+        <rect x="0" y="0" width="602" height="142" rx="24" fill="#f8fbfa" stroke="#d7e7e3"/>
+        <rect x="18" y="16" width="560" height="46" rx="17" fill="#ffffff" stroke="#d7e7e3"/>
+        <rect x="36" y="27" width="26" height="26" rx="9" fill="#fff3df"/>
+        <text x="86" y="46" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="900">项目路径</text>
+
+        <rect x="18" y="78" width="560" height="48" rx="17" fill="#edfffb" stroke="#21d6c5" stroke-width="2"/>
+        <rect x="36" y="89" width="28" height="28" rx="9" fill="#e8f7ff"/>
+        <path d="M43 110l8-9 7 7 6-8 10 10z" fill="#0ea5e9"/>
+        <text x="86" y="108" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="900">screenshot_product_ui.png</text>
+      </g>
+
+      <g transform="translate(660 152)">
+        <rect x="0" y="0" width="304" height="142" rx="24" fill="#ffffff" stroke="#d7e7e3"/>
+        <text x="28" y="31" fill="#8aa6a1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13" font-weight="900">当前选择</text>
+        <text x="28" y="58" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="22" font-weight="900">图片预览</text>
+        <rect x="166" y="28" width="108" height="74" rx="16" fill="url(#photo)"/>
+        <path d="M178 91l28-25 21 17 14-13 29 21z" fill="#ffffff" opacity="0.72"/>
+        <rect x="28" y="94" width="112" height="30" rx="15" fill="#0f8f83"/>
+        <text x="70" y="115" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">复制</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(92 664)">
+    <rect x="0" y="0" width="150" height="34" rx="17" fill="#e9fffa" stroke="#bff2ea"/>
+    <text x="44" y="23" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">正则搜索</text>
+    <rect x="170" y="0" width="150" height="34" rx="17" fill="#fff3df" stroke="#ffe0b8"/>
+    <text x="214" y="23" fill="#bd5b0b" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">图片预览</text>
+    <rect x="340" y="0" width="150" height="34" rx="17" fill="#e9fffa" stroke="#bff2ea"/>
+    <text x="384" y="23" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14" font-weight="900">本地存储</text>
+  </g>
+</svg>

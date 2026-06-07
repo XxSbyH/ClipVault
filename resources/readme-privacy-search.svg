@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="520" viewBox="0 0 1280 520" role="img" aria-label="ClipVault 隐私与正则搜索宣传预览">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f7fbf8"/>
+      <stop offset="1" stop-color="#eefaf6"/>
+    </linearGradient>
+    <filter id="shadow" x="-8%" y="-12%" width="116%" height="136%">
+      <feDropShadow dx="0" dy="22" stdDeviation="22" flood-color="#0a3f3b" flood-opacity="0.14"/>
+    </filter>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0v28" fill="none" stroke="#cfe6e1" stroke-opacity="0.42"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="520" fill="url(#bg)"/>
+  <rect width="1280" height="520" fill="url(#grid)"/>
+  <circle cx="1088" cy="380" r="170" fill="#d8fff7" opacity="0.72"/>
+  <circle cx="164" cy="82" r="150" fill="#f97316" opacity="0.08"/>
+
+  <g transform="translate(92 58)">
+    <text x="0" y="0" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="900" letter-spacing="5">PRIVATE BY DEFAULT</text>
+    <text x="0" y="48" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="40" font-weight="900">隐私过滤 + 正则搜索</text>
+    <text x="0" y="84" fill="#58736f" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="20" font-weight="700">长期常驻也安心：敏感内容默认跳过，历史内容可精准查找。</text>
+  </g>
+
+  <g transform="translate(92 184)" filter="url(#shadow)">
+    <rect x="0" y="0" width="514" height="250" rx="34" fill="#ffffff" stroke="#d7e7e3"/>
+    <text x="34" y="52" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="26" font-weight="900">搜索模式</text>
+    <rect x="34" y="82" width="446" height="58" rx="20" fill="#f8fbfa" stroke="#d7e7e3"/>
+    <text x="62" y="120" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="21" font-weight="900">/token|key|secret/i</text>
+    <rect x="34" y="164" width="138" height="44" rx="22" fill="#0f8f83"/>
+    <text x="86" y="192" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="16" font-weight="900">正则</text>
+    <rect x="188" y="164" width="138" height="44" rx="22" fill="#e9fffa"/>
+    <text x="240" y="192" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="16" font-weight="900">文本</text>
+    <rect x="342" y="164" width="138" height="44" rx="22" fill="#fff3df"/>
+    <text x="394" y="192" fill="#bd5b0b" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="16" font-weight="900">路径</text>
+  </g>
+
+  <g transform="translate(674 184)" filter="url(#shadow)">
+    <rect x="0" y="0" width="514" height="250" rx="34" fill="#ffffff" stroke="#d7e7e3"/>
+    <text x="34" y="52" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="26" font-weight="900">隐私策略</text>
+
+    <g transform="translate(34 78)">
+      <rect x="0" y="0" width="446" height="44" rx="22" fill="#f8fbfa"/>
+      <circle cx="22" cy="22" r="12" fill="#0f8f83"/>
+      <path d="M16 22l5 5 9-12" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="52" y="29" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="900">跳过密码、卡号、token</text>
+
+      <rect x="0" y="58" width="446" height="44" rx="22" fill="#f8fbfa"/>
+      <circle cx="22" cy="80" r="12" fill="#f97316"/>
+      <path d="M16 80h12" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+      <text x="52" y="87" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="900">应用黑名单防止误记录</text>
+
+      <rect x="0" y="116" width="446" height="44" rx="22" fill="#f8fbfa"/>
+      <circle cx="22" cy="138" r="12" fill="#0f8f83"/>
+      <path d="M16 138l5 5 9-12" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="52" y="145" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="17" font-weight="900">默认本地 SQLite 存储</text>
+    </g>
+  </g>
+</svg>
