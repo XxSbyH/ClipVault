@@ -296,9 +296,24 @@ fn handle_hotkey_action(app: &AppHandle, action: HotkeyAction) {
             }
         }
         HotkeyAction::QuickPaste(direction) => {
-            let _ = quick_paste(app, direction);
+            let _ = quick_copy(app, direction);
         }
     }
+}
+
+fn resolve_quick_history_item(
+    state: &AppState,
+    direction: QuickPasteDirection,
+) -> AppResult<Option<ClipboardItem>> {
+    let total = state.repository().count_items()?;
+    let history = state.repository().get_history(1)?;
+    let Some(offset) =
+        state.quick_paste_cursor_mut(|cursor| cursor.resolve(direction, total, head_id(&history)))
+    else {
+        return Ok(None);
+    };
+
+    state.repository().get_history_by_offset(offset)
 }
 
 fn copy_quick_history_item<F>(
@@ -309,19 +324,58 @@ fn copy_quick_history_item<F>(
 where
     F: FnOnce(&ClipboardItem) -> AppResult<()>,
 {
-    let total = state.repository().count_items()?;
-    let history = state.repository().get_history(1)?;
-    let Some(offset) =
-        state.quick_paste_cursor_mut(|cursor| cursor.resolve(direction, total, head_id(&history)))
-    else {
-        return Ok(None);
-    };
-
-    let Some(item) = state.repository().get_history_by_offset(offset)? else {
+    let Some(item) = resolve_quick_history_item(state, direction)? else {
         return Ok(None);
     };
 
     commands::copy_item_impl(state, item.id, copy).map(Some)
+}
+
+fn paste_quick_history_item<F>(
+    state: &AppState,
+    direction: QuickPasteDirection,
+    paste: F,
+) -> AppResult<Option<commands::PasteResult>>
+where
+    F: FnOnce(&ClipboardItem) -> AppResult<()>,
+{
+    let Some(item) = resolve_quick_history_item(state, direction)? else {
+        return Ok(None);
+    };
+
+    commands::paste_item_impl(state, item.id, paste).map(Some)
+}
+
+fn quick_copy(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()> {
+    let state = app.state::<AppState>();
+    let hud_direction = match direction {
+        QuickPasteDirection::Older => HudDirection::Prev,
+        QuickPasteDirection::Newer => HudDirection::Next,
+    };
+
+    let Some(result) = copy_quick_history_item(state.inner(), direction, |item| {
+        paste::write_item_to_clipboard(app, item)
+    })?
+    else {
+        return Ok(());
+    };
+
+    if let Some(item) = result.item.as_ref() {
+        commands::emit_hud_notification(
+            app,
+            HudPayload::quick_paste(hud_direction, item.content_type, item.preview.clone()),
+        );
+    }
+
+    if result.success {
+        let _ = app.emit(
+            events::HISTORY_REVISION,
+            commands::HistoryRevisionPayload {
+                revision: result.revision,
+            },
+        );
+    }
+    Ok(())
 }
 
 fn quick_paste(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()> {
@@ -331,8 +385,8 @@ fn quick_paste(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()>
         QuickPasteDirection::Newer => HudDirection::Next,
     };
 
-    let Some(result) = copy_quick_history_item(state.inner(), direction, |item| {
-        paste::write_item_to_clipboard(app, item)
+    let Some(result) = paste_quick_history_item(state.inner(), direction, |item| {
+        paste::write_clipboard_and_paste(app, item)
     })?
     else {
         return Ok(());
@@ -701,6 +755,52 @@ mod tests {
         assert_eq!(result.message, "copy failed");
         assert_eq!(stored.use_count, 0);
         assert_eq!(stored.last_used_at, None);
+    }
+
+    #[test]
+    fn quick_history_action_separates_copy_and_paste_helpers() {
+        let copy_state = AppState::new(repo());
+        let copy_older = copy_state
+            .repository()
+            .insert_clipboard_item(text_input("copy older", "hash-copy-older"))
+            .unwrap();
+        copy_state
+            .repository()
+            .insert_clipboard_item(text_input("copy newest", "hash-copy-newest"))
+            .unwrap();
+        let mut copied_id = None;
+
+        let copy_result =
+            copy_quick_history_item(&copy_state, QuickPasteDirection::Older, |item| {
+                copied_id = Some(item.id);
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+
+        let paste_state = AppState::new(repo());
+        let paste_older = paste_state
+            .repository()
+            .insert_clipboard_item(text_input("paste older", "hash-paste-older"))
+            .unwrap();
+        paste_state
+            .repository()
+            .insert_clipboard_item(text_input("paste newest", "hash-paste-newest"))
+            .unwrap();
+        let mut pasted_id = None;
+
+        let paste_result =
+            paste_quick_history_item(&paste_state, QuickPasteDirection::Older, |item| {
+                pasted_id = Some(item.id);
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(copied_id, Some(copy_older.id));
+        assert_eq!(copy_result.message, "copied");
+        assert_eq!(pasted_id, Some(paste_older.id));
+        assert_eq!(paste_result.message, "pasted");
     }
 
     #[test]
