@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS fixed_contents (
   title TEXT NOT NULL,
   content TEXT NOT NULL,
   hotkey TEXT NOT NULL,
-  enabled INTEGER DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   last_used_at INTEGER,

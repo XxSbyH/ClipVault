@@ -251,6 +251,28 @@ mod tests {
             "content_hash should be unique"
         );
 
+        let invalid_enabled = conn.execute(
+            "INSERT INTO fixed_contents
+             (title, content, hotkey, enabled, created_at, updated_at)
+             VALUES ('invalid', 'invalid', 'Ctrl+9', 2, 1, 1)",
+            [],
+        );
+        assert!(
+            invalid_enabled.is_err(),
+            "fixed_contents.enabled should reject values outside 0/1"
+        );
+
+        let null_enabled = conn.execute(
+            "INSERT INTO fixed_contents
+             (title, content, hotkey, enabled, created_at, updated_at)
+             VALUES ('null', 'null', 'Ctrl+0', NULL, 1, 1)",
+            [],
+        );
+        assert!(
+            null_enabled.is_err(),
+            "fixed_contents.enabled should reject NULL"
+        );
+
         for trigger in [
             "clipboard_items_ai",
             "clipboard_items_ad",

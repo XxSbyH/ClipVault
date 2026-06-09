@@ -994,13 +994,21 @@ mod tests {
 
         let duplicate = repo
             .create_fixed_content(&fixed_input("B", "B", "Ctrl+1", true))
-            .unwrap_err();
-        assert!(duplicate.to_string().contains("fixed_contents"));
+            .is_err();
+        assert!(duplicate);
 
         let disabled_duplicate = repo
             .create_fixed_content(&fixed_input("C", "C", "Ctrl+1", false))
             .unwrap();
         assert!(!disabled_duplicate.enabled);
+
+        let enabled_duplicate = repo
+            .update_fixed_content(
+                disabled_duplicate.id,
+                &fixed_input("C", "C", "Ctrl+1", true),
+            )
+            .is_err();
+        assert!(enabled_duplicate);
     }
 
     #[test]
