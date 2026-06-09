@@ -76,6 +76,29 @@ pub struct ClipboardInsertInput {
     pub image_data: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixedContent {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    pub hotkey: String,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_used_at: Option<i64>,
+    pub use_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixedContentInput {
+    pub title: String,
+    pub content: String,
+    pub hotkey: String,
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageCompression {

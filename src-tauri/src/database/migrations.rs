@@ -166,6 +166,7 @@ mod tests {
             "clipboard_items",
             "settings",
             "app_blacklist",
+            "fixed_contents",
             "clipboard_fts",
         ] {
             assert!(
@@ -221,6 +222,7 @@ mod tests {
             "idx_is_pinned",
             "idx_is_favorite",
             "idx_blacklist_unique",
+            "idx_fixed_contents_hotkey_enabled",
         ] {
             assert!(
                 object_exists(&conn, index, "index"),

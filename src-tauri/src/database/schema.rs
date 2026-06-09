@@ -1,6 +1,7 @@
 pub const CLIPBOARD_ITEMS_TABLE: &str = "clipboard_items";
 pub const SETTINGS_TABLE: &str = "settings";
 pub const APP_BLACKLIST_TABLE: &str = "app_blacklist";
+pub const FIXED_CONTENTS_TABLE: &str = "fixed_contents";
 pub const CLIPBOARD_FTS_TABLE: &str = "clipboard_fts";
 
 pub const CREATE_SCHEMA_SQL: &str = r#"
@@ -41,4 +42,20 @@ CREATE TABLE IF NOT EXISTS app_blacklist (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_blacklist_unique ON app_blacklist(app_name, is_builtin);
+
+CREATE TABLE IF NOT EXISTS fixed_contents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  hotkey TEXT NOT NULL,
+  enabled INTEGER DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  use_count INTEGER DEFAULT 0
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fixed_contents_hotkey_enabled
+ON fixed_contents(hotkey)
+WHERE enabled = 1;
 "#;
