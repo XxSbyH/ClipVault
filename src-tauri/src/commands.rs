@@ -176,6 +176,12 @@ pub struct HotkeyAvailability {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct KeyboardShortcutSnapshot {
+    settings: HotkeySettings,
+    fixed_contents: Vec<FixedContent>,
+}
+
 pub fn get_history_impl(state: &AppState, limit: Option<i64>) -> AppResult<Vec<ClipboardItem>> {
     state
         .repository()
@@ -770,11 +776,12 @@ pub fn create_fixed_content(
     state: State<'_, AppState>,
     input: FixedContentInput,
 ) -> AppResult<FixedContent> {
+    let restore_snapshot = keyboard_shortcut_snapshot(state.inner())?;
     let created = create_fixed_content_impl(state.inner(), input)?;
 
     if let Err(error) = hotkeys::replace_all_keyboard_shortcuts(&app, state.inner()) {
         let rollback_error = state.repository().delete_fixed_content(created.id).err();
-        let restore_error = restore_all_keyboard_shortcuts(&app, state.inner()).err();
+        let restore_error = restore_keyboard_shortcuts_from_snapshot(&app, &restore_snapshot).err();
         return Err(fixed_content_registration_error(
             error,
             rollback_error,
@@ -1058,6 +1065,24 @@ fn restore_wheel_hook(app: &AppHandle, settings: &AppSettings) {
     ) {
         tracing::error!(target: "hotkeys", "failed to restore previous wheel hook: {error}");
     }
+}
+
+fn keyboard_shortcut_snapshot(state: &AppState) -> AppResult<KeyboardShortcutSnapshot> {
+    Ok(KeyboardShortcutSnapshot {
+        settings: state.repository().get_hotkey_settings()?,
+        fixed_contents: state.repository().list_fixed_contents()?,
+    })
+}
+
+fn restore_keyboard_shortcuts_from_snapshot(
+    app: &AppHandle,
+    snapshot: &KeyboardShortcutSnapshot,
+) -> AppResult<()> {
+    hotkeys::replace_keyboard_shortcuts_with_fixed_contents(
+        app,
+        &snapshot.settings,
+        &snapshot.fixed_contents,
+    )
 }
 
 fn restore_all_keyboard_shortcuts(app: &AppHandle, state: &AppState) -> AppResult<()> {
@@ -1700,6 +1725,37 @@ mod tests {
         assert!(message.contains("registration failed"));
         assert!(message.contains("delete rollback failed"));
         assert!(message.contains("restore failed"));
+    }
+
+    #[test]
+    fn fixed_content_restore_snapshot_uses_captured_fixed_contents() {
+        let state = super::AppState::new(repo());
+        let old = state
+            .repository()
+            .create_fixed_content(&fixed_content_input("Old", "A", "Ctrl+1", true))
+            .unwrap();
+
+        let snapshot = super::keyboard_shortcut_snapshot(&state).unwrap();
+        let new = state
+            .repository()
+            .create_fixed_content(&fixed_content_input("New", "B", "Ctrl+2", true))
+            .unwrap();
+
+        let snapshot_ids: Vec<i64> = snapshot
+            .fixed_contents
+            .iter()
+            .map(|content| content.id)
+            .collect();
+        let current_ids: Vec<i64> = state
+            .repository()
+            .list_fixed_contents()
+            .unwrap()
+            .into_iter()
+            .map(|content| content.id)
+            .collect();
+
+        assert_eq!(snapshot_ids, vec![old.id]);
+        assert!(current_ids.contains(&new.id));
     }
 
     #[test]
