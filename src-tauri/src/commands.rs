@@ -500,28 +500,71 @@ pub fn test_monitoring_impl(state: &AppState) -> MonitoringStatus {
 }
 
 pub fn check_hotkey_conflicts_impl(patch: &HotkeySettingsPatch) -> HotkeyConflictReport {
-    let mut by_hotkey: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    hotkey_conflict_report(
+        hotkey_patch_entries(patch)
+            .into_iter()
+            .map(|(command, hotkey)| (command.to_string(), hotkey.to_string())),
+    )
+}
+
+pub fn check_hotkey_conflicts_with_state_impl(
+    state: &AppState,
+    patch: &HotkeySettingsPatch,
+) -> HotkeyConflictReport {
+    let mut entries: Vec<(String, String)> = Vec::new();
     for (command, value) in hotkey_patch_entries(patch) {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            by_hotkey
-                .entry(trimmed.to_string())
-                .or_default()
-                .push(command.to_string());
+        entries.push((command.to_string(), value.to_string()));
+    }
+    if let Ok(fixed_contents) = state.repository().list_fixed_contents() {
+        for content in fixed_contents {
+            if content.enabled {
+                entries.push((format!("fixed content {}", content.id), content.hotkey));
+            }
         }
+    }
+    hotkey_conflict_report(entries)
+}
+
+fn hotkey_conflict_report(
+    entries: impl IntoIterator<Item = (String, String)>,
+) -> HotkeyConflictReport {
+    let mut by_hotkey: BTreeMap<String, HotkeyConflict> = BTreeMap::new();
+    for (command, value) in entries {
+        add_hotkey_conflict_candidate(&mut by_hotkey, command, value);
     }
 
     let conflicts: Vec<HotkeyConflict> = by_hotkey
-        .into_iter()
-        .filter_map(|(hotkey, commands)| {
-            (commands.len() > 1).then_some(HotkeyConflict { hotkey, commands })
-        })
+        .into_values()
+        .filter_map(|conflict| (conflict.commands.len() > 1).then_some(conflict))
         .collect();
 
     HotkeyConflictReport {
         has_conflicts: !conflicts.is_empty(),
         conflicts,
     }
+}
+
+fn add_hotkey_conflict_candidate(
+    by_hotkey: &mut BTreeMap<String, HotkeyConflict>,
+    command: String,
+    value: String,
+) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let key = match parse_hotkey_id(&command, trimmed) {
+        Ok(id) => format!("id:{id}"),
+        Err(_) => format!("raw:{trimmed}"),
+    };
+    by_hotkey
+        .entry(key)
+        .and_modify(|conflict| conflict.commands.push(command.clone()))
+        .or_insert_with(|| HotkeyConflict {
+            hotkey: trimmed.to_string(),
+            commands: vec![command],
+        });
 }
 
 pub fn check_hotkey_available_impl(hotkey: String) -> HotkeyAvailability {
@@ -730,15 +773,13 @@ pub fn create_fixed_content(
     let created = create_fixed_content_impl(state.inner(), input)?;
 
     if let Err(error) = hotkeys::replace_all_keyboard_shortcuts(&app, state.inner()) {
-        if let Err(rollback_error) = state.repository().delete_fixed_content(created.id) {
-            return Err(AppError::from(format!(
-                "{error}; failed to rollback fixed content create: {rollback_error}"
-            )));
-        }
-        if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
-            return Err(with_restore_error(error, restore_error));
-        }
-        return Err(error);
+        let rollback_error = state.repository().delete_fixed_content(created.id).err();
+        let restore_error = restore_all_keyboard_shortcuts(&app, state.inner()).err();
+        return Err(fixed_content_registration_error(
+            error,
+            rollback_error,
+            restore_error,
+        ));
     }
 
     Ok(created)
@@ -831,8 +872,11 @@ pub fn get_hotkeys(state: State<'_, AppState>) -> AppResult<HotkeySettings> {
 }
 
 #[tauri::command]
-pub fn check_hotkey_conflicts(patch: HotkeySettingsPatch) -> HotkeyConflictReport {
-    check_hotkey_conflicts_impl(&patch)
+pub fn check_hotkey_conflicts(
+    state: State<'_, AppState>,
+    patch: HotkeySettingsPatch,
+) -> HotkeyConflictReport {
+    check_hotkey_conflicts_with_state_impl(state.inner(), &patch)
 }
 
 #[tauri::command]
@@ -1024,6 +1068,23 @@ fn with_restore_error(error: AppError, restore_error: AppError) -> AppError {
     AppError::from(format!(
         "{error}; failed to restore previous hotkeys: {restore_error}"
     ))
+}
+
+fn fixed_content_registration_error(
+    error: AppError,
+    rollback_error: Option<AppError>,
+    restore_error: Option<AppError>,
+) -> AppError {
+    let mut message = error.to_string();
+    if let Some(rollback_error) = rollback_error {
+        message.push_str("; failed to rollback fixed content create: ");
+        message.push_str(&rollback_error.to_string());
+    }
+    if let Some(restore_error) = restore_error {
+        message.push_str("; failed to restore previous hotkeys: ");
+        message.push_str(&restore_error.to_string());
+    }
+    AppError::from(message)
 }
 
 fn monitoring_status(monitoring: &MonitoringRuntimeState) -> MonitoringStatus {
@@ -1566,6 +1627,79 @@ mod tests {
         assert!(report.has_conflicts);
         assert_eq!(report.conflicts.len(), 1);
         assert_eq!(report.conflicts[0].hotkey, "Ctrl+Shift+V");
+    }
+
+    #[test]
+    fn commands_hotkey_conflicts_detect_equivalent_shortcuts_by_parser_id() {
+        let report = super::check_hotkey_conflicts_impl(&HotkeySettingsPatch {
+            open_panel: Some("CommandOrControl+Shift+V".to_string()),
+            search: Some("Ctrl+Shift+V".to_string()),
+            ..HotkeySettingsPatch::default()
+        });
+
+        assert!(report.has_conflicts);
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(
+            report.conflicts[0].commands,
+            vec!["openPanel".to_string(), "search".to_string()]
+        );
+    }
+
+    #[test]
+    fn commands_hotkey_conflicts_include_enabled_fixed_contents() {
+        let state = super::AppState::new(repo());
+        state
+            .repository()
+            .create_fixed_content(&fixed_content_input("Enabled", "A", "Ctrl+1", true))
+            .unwrap();
+
+        let report = super::check_hotkey_conflicts_with_state_impl(
+            &state,
+            &HotkeySettingsPatch {
+                open_panel: Some("Ctrl+1".to_string()),
+                ..HotkeySettingsPatch::default()
+            },
+        );
+
+        assert!(report.has_conflicts);
+        assert_eq!(report.conflicts.len(), 1);
+        assert!(report.conflicts[0]
+            .commands
+            .contains(&"openPanel".to_string()));
+        assert!(report.conflicts[0]
+            .commands
+            .iter()
+            .any(|command| command.starts_with("fixed content")));
+
+        let disabled_state = super::AppState::new(repo());
+        disabled_state
+            .repository()
+            .create_fixed_content(&fixed_content_input("Disabled", "A", "Ctrl+1", false))
+            .unwrap();
+        let disabled_report = super::check_hotkey_conflicts_with_state_impl(
+            &disabled_state,
+            &HotkeySettingsPatch {
+                open_panel: Some("Ctrl+1".to_string()),
+                ..HotkeySettingsPatch::default()
+            },
+        );
+
+        assert!(!disabled_report.has_conflicts);
+        assert!(disabled_report.conflicts.is_empty());
+    }
+
+    #[test]
+    fn fixed_content_registration_error_includes_rollback_and_restore_failures() {
+        let error = super::fixed_content_registration_error(
+            AppError::from("registration failed"),
+            Some(AppError::from("delete rollback failed")),
+            Some(AppError::from("restore failed")),
+        );
+        let message = error.to_string();
+
+        assert!(message.contains("registration failed"));
+        assert!(message.contains("delete rollback failed"));
+        assert!(message.contains("restore failed"));
     }
 
     #[test]

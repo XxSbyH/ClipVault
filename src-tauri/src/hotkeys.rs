@@ -361,7 +361,7 @@ fn paste_fixed_content(app: &AppHandle, id: i64) -> AppResult<()> {
         return Ok(());
     };
 
-    commands::emit_hud_notification(app, HudPayload::panel("Fixed content", &content.title));
+    commands::emit_hud_notification(app, HudPayload::panel("固定内容", &content.title));
     Ok(())
 }
 
