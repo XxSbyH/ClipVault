@@ -118,6 +118,25 @@ export interface BlacklistApp {
   createdAt: number;
 }
 
+export interface FixedContent {
+  id: number;
+  title: string;
+  content: string;
+  hotkey: string | null;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt: number | null;
+  useCount: number;
+}
+
+export interface FixedContentInput {
+  title: string;
+  content: string;
+  hotkey?: string | null;
+  enabled: boolean;
+}
+
 export type FilterType = 'all' | 'text' | 'image' | 'code' | 'url' | 'favorite';
 
 export interface ClipboardApi {
@@ -138,6 +157,10 @@ export interface ClipboardApi {
   listBlacklist: () => Promise<BlacklistApp[]>;
   addBlacklist: (appName: string, appPath?: string) => Promise<BlacklistApp>;
   removeBlacklist: (id: number) => Promise<void>;
+  listFixedContents: () => Promise<FixedContent[]>;
+  createFixedContent: (input: FixedContentInput) => Promise<FixedContent>;
+  updateFixedContent: (id: number, input: FixedContentInput) => Promise<FixedContent>;
+  deleteFixedContent: (id: number) => Promise<void>;
   clearHistory: () => Promise<{ success: boolean; deleted: number; error?: string }>;
   toggleMonitoring: () => Promise<boolean>;
   minimizeWindow: () => Promise<void>;
