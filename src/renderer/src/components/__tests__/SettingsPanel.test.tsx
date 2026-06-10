@@ -81,13 +81,19 @@ function makeBlacklistApp(id: number, appName: string, isBuiltin = false): Black
   };
 }
 
-function makeFixedContent(id: number, title: string, content: string, hotkey: string): FixedContent {
+function makeFixedContent(
+  id: number,
+  title: string,
+  content: string,
+  hotkey: string,
+  enabled = true
+): FixedContent {
   return {
     id,
     title,
     content,
     hotkey,
-    enabled: true,
+    enabled,
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_000,
     lastUsedAt: null,
@@ -229,6 +235,7 @@ describe('SettingsPanel', () => {
     renderPanel('hotkeys');
 
     expect(await screen.findByText('固定快捷内容')).toBeInTheDocument();
+    expect(screen.getByText('为常用文本绑定快捷键，触发后写入剪贴板并粘贴。')).toBeInTheDocument();
     expect(screen.getByText('Topic A')).toBeInTheDocument();
     expect(screen.getByText('Ctrl+1')).toBeInTheDocument();
 
@@ -250,7 +257,91 @@ describe('SettingsPanel', () => {
         hotkey: 'Ctrl+2',
         enabled: true
       });
+      expect(listFixedContentsMock).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it('updates an existing fixed content hotkey and saves disabled state', async () => {
+    listFixedContentsMock.mockResolvedValue([makeFixedContent(7, 'Topic A', 'Pinned A', 'Ctrl+1')]);
+    renderPanel('hotkeys');
+
+    expect(await screen.findByText('Topic A')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '编辑固定内容 Topic A' }));
+    fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'Topic A Updated' } });
+    fireEvent.change(screen.getByLabelText('内容'), { target: { value: 'Pinned A Updated' } });
+    fireEvent.click(screen.getByRole('switch', { name: '启用固定内容' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存固定内容' }));
+
+    await waitFor(() => {
+      expect(updateFixedContentMock).toHaveBeenCalledWith(7, {
+        title: 'Topic A Updated',
+        content: 'Pinned A Updated',
+        hotkey: 'Ctrl+1',
+        enabled: false
+      });
+      expect(listFixedContentsMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('shows a fixed content conflict when the hotkey is already used by normal shortcuts', async () => {
+    renderPanel('hotkeys');
+
+    await screen.findByText('固定快捷内容');
+    fireEvent.click(screen.getByRole('button', { name: '新增固定内容' }));
+    fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'Topic B' } });
+    fireEvent.change(screen.getByLabelText('内容'), { target: { value: 'Pinned B' } });
+    fireEvent.click(screen.getByRole('button', { name: /录制固定内容快捷键/ }));
+    fireEvent.keyDown(window, { key: 'Control' });
+    fireEvent.keyDown(window, { key: 'Shift' });
+    fireEvent.keyDown(window, { key: 'v' });
+    fireEvent.keyUp(window, { key: 'v' });
+
+    await screen.findByRole('button', { name: '录制固定内容快捷键 Ctrl+Shift+V' });
+    fireEvent.click(screen.getByRole('button', { name: '保存固定内容' }));
+
+    expect(await screen.findByText('快捷键冲突：Ctrl+Shift+V 已绑定到 打开/隐藏面板。')).toBeInTheDocument();
+    expect(createFixedContentMock).not.toHaveBeenCalled();
+  });
+
+  it('shows a fixed content conflict when the hotkey is already used by enabled fixed content', async () => {
+    listFixedContentsMock.mockResolvedValue([makeFixedContent(7, 'Topic A', 'Pinned A', 'Ctrl+1')]);
+    renderPanel('hotkeys');
+
+    expect(await screen.findByText('Topic A')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '新增固定内容' }));
+    fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'Topic B' } });
+    fireEvent.change(screen.getByLabelText('内容'), { target: { value: 'Pinned B' } });
+    fireEvent.click(screen.getByRole('button', { name: /录制固定内容快捷键/ }));
+    fireEvent.keyDown(window, { key: 'Control' });
+    fireEvent.keyDown(window, { key: '1' });
+    fireEvent.keyUp(window, { key: '1' });
+
+    await screen.findByRole('button', { name: /Ctrl\+1/ });
+    fireEvent.click(screen.getByRole('button', { name: '保存固定内容' }));
+
+    expect(await screen.findByText('快捷键冲突：Ctrl+1 已绑定到固定内容「Topic A」。')).toBeInTheDocument();
+    expect(createFixedContentMock).not.toHaveBeenCalled();
+  });
+
+  it('shows backend fixed content conflict details when save is rejected', async () => {
+    createFixedContentMock.mockRejectedValue('hotkey Ctrl+2 is assigned to both fixed content 7 and fixed content candidate');
+    renderPanel('hotkeys');
+
+    await screen.findByText('固定快捷内容');
+    fireEvent.click(screen.getByRole('button', { name: '新增固定内容' }));
+    fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'Topic B' } });
+    fireEvent.change(screen.getByLabelText('内容'), { target: { value: 'Pinned B' } });
+    fireEvent.click(screen.getByRole('button', { name: /录制固定内容快捷键/ }));
+    fireEvent.keyDown(window, { key: 'Control' });
+    fireEvent.keyDown(window, { key: '2' });
+    fireEvent.keyUp(window, { key: '2' });
+
+    await screen.findByRole('button', { name: /Ctrl\+2/ });
+    fireEvent.click(screen.getByRole('button', { name: '保存固定内容' }));
+
+    expect(
+      await screen.findByText('快捷键冲突：Ctrl+2 已绑定到 固定内容 #7 和 当前固定内容。')
+    ).toBeInTheDocument();
   });
 
   it('deletes a fixed content hotkey and refreshes the list', async () => {

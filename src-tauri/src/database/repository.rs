@@ -18,6 +18,9 @@ use crate::{
     },
 };
 
+const CLIPBOARD_ITEM_SUMMARY_COLUMNS: &str = "id, content, content_type, content_hash, preview, metadata, file_path, NULL AS image_data, created_at, last_used_at, use_count, is_pinned, is_favorite";
+const CLIPBOARD_ITEM_SUMMARY_COLUMNS_QUALIFIED: &str = "clipboard_items.id, clipboard_items.content, clipboard_items.content_type, clipboard_items.content_hash, clipboard_items.preview, clipboard_items.metadata, clipboard_items.file_path, NULL AS image_data, clipboard_items.created_at, clipboard_items.last_used_at, clipboard_items.use_count, clipboard_items.is_pinned, clipboard_items.is_favorite";
+
 pub struct Repository {
     conn: Arc<Mutex<Connection>>,
 }
@@ -39,7 +42,11 @@ impl Repository {
     pub fn insert_clipboard_item(&self, input: ClipboardInsertInput) -> AppResult<ClipboardItem> {
         let conn = self.conn()?;
         if let Some(existing) = self.get_item_by_hash_locked(&conn, &input.content_hash)? {
-            return Ok(existing);
+            conn.execute(
+                "UPDATE clipboard_items SET created_at = ?1 WHERE id = ?2",
+                params![now_timestamp(), existing.id],
+            )?;
+            return self.get_item_locked(&conn, existing.id);
         }
 
         let metadata = serde_json::to_string(&input.metadata.unwrap_or_default())?;
@@ -77,24 +84,22 @@ impl Repository {
 
     pub fn get_history(&self, limit: i64) -> AppResult<Vec<ClipboardItem>> {
         let conn = self.conn()?;
-        query_items(
-            &conn,
-            "SELECT * FROM clipboard_items
+        let sql = format!(
+            "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
              ORDER BY is_pinned DESC, created_at DESC, id DESC
-             LIMIT ?1",
-            params![limit],
-        )
+             LIMIT ?1"
+        );
+        query_items(&conn, &sql, params![limit])
     }
 
     pub fn get_history_page(&self, limit: i64, offset: i64) -> AppResult<Vec<ClipboardItem>> {
         let conn = self.conn()?;
-        query_items(
-            &conn,
-            "SELECT * FROM clipboard_items
+        let sql = format!(
+            "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
              ORDER BY is_pinned DESC, created_at DESC, id DESC
-             LIMIT ?1 OFFSET ?2",
-            params![limit, offset],
-        )
+             LIMIT ?1 OFFSET ?2"
+        );
+        query_items(&conn, &sql, params![limit, offset])
     }
 
     pub fn get_history_by_offset(&self, offset: i64) -> AppResult<Option<ClipboardItem>> {
@@ -198,24 +203,22 @@ impl Repository {
         let fts_query = query.replace('"', "\"\"");
         let like = format!("%{query}%");
         let like_search = || {
-            query_items(
-                &conn,
-                "SELECT * FROM clipboard_items
+            let sql = format!(
+                "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
                  WHERE content LIKE ?1 OR preview LIKE ?1
                  ORDER BY is_pinned DESC, created_at DESC, id DESC
-                 LIMIT ?2",
-                params![like, limit],
-            )
+                 LIMIT ?2"
+            );
+            query_items(&conn, &sql, params![like, limit])
         };
-        let fts = query_items(
-            &conn,
-            "SELECT clipboard_items.* FROM clipboard_items
+        let sql = format!(
+            "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS_QUALIFIED} FROM clipboard_items
              JOIN clipboard_fts ON clipboard_fts.rowid = clipboard_items.id
              WHERE clipboard_fts MATCH ?1
              ORDER BY is_pinned DESC, created_at DESC, id DESC
-             LIMIT ?2",
-            params![fts_query, limit],
+             LIMIT ?2"
         );
+        let fts = query_items(&conn, &sql, params![fts_query, limit]);
 
         match fts {
             Ok(items) if !items.is_empty() => Ok(items),
@@ -839,6 +842,18 @@ mod tests {
         }
     }
 
+    fn image_input(content: &str, hash: &str, image_data: Vec<u8>) -> ClipboardInsertInput {
+        ClipboardInsertInput {
+            content: Some(content.to_string()),
+            content_type: ClipboardContentType::Image,
+            content_hash: hash.to_string(),
+            preview: content.to_string(),
+            metadata: None,
+            file_path: None,
+            image_data: Some(image_data),
+        }
+    }
+
     fn fixed_input(title: &str, content: &str, hotkey: &str, enabled: bool) -> FixedContentInput {
         FixedContentInput {
             title: title.to_string(),
@@ -855,12 +870,23 @@ mod tests {
         let first = repo
             .insert_clipboard_item(text_input("hello", "hash-1"))
             .unwrap();
+        repo.conn()
+            .unwrap()
+            .execute(
+                "UPDATE clipboard_items SET created_at = 100 WHERE id = ?1",
+                rusqlite::params![first.id],
+            )
+            .unwrap();
         let duplicate = repo
             .insert_clipboard_item(text_input("changed", "hash-1"))
             .unwrap();
 
         assert_eq!(first.id, duplicate.id);
         assert_eq!(duplicate.content.as_deref(), Some("hello"));
+        assert!(
+            duplicate.created_at > 100,
+            "duplicate captures should refresh the existing item timestamp"
+        );
         assert_eq!(repo.get_item_by_id(first.id).unwrap().unwrap().id, first.id);
         assert_eq!(repo.count_items().unwrap(), 1);
     }
@@ -893,6 +919,24 @@ mod tests {
 
         assert_eq!(history[0].id, older.id);
         assert_eq!(history[1].id, newer.id);
+    }
+
+    #[test]
+    fn get_history_returns_image_summaries_without_image_data() {
+        let repo = repo();
+        let item = repo
+            .insert_clipboard_item(image_input("clip.png", "hash-image-summary", vec![1, 2, 3]))
+            .unwrap();
+
+        let history = repo.get_history(10).unwrap();
+        let summary = history
+            .iter()
+            .find(|current| current.id == item.id)
+            .unwrap();
+        let detail = repo.get_item_by_id(item.id).unwrap().unwrap();
+
+        assert_eq!(summary.image_data, None);
+        assert_eq!(detail.image_data, Some(vec![1, 2, 3]));
     }
 
     #[test]

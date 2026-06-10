@@ -395,77 +395,48 @@ where
     commands::copy_item_impl(state, item.id, copy).map(Some)
 }
 
-fn paste_quick_history_item<F>(
+fn wheel_quick_history_item<F>(
     state: &AppState,
     direction: QuickPasteDirection,
-    paste: F,
+    copy: F,
 ) -> AppResult<Option<commands::PasteResult>>
 where
     F: FnOnce(&ClipboardItem) -> AppResult<()>,
 {
-    let Some(item) = resolve_quick_history_item(state, direction)? else {
-        return Ok(None);
-    };
-
-    commands::paste_item_impl(state, item.id, paste).map(Some)
+    copy_quick_history_item(state, direction, copy)
 }
 
-fn quick_copy_success_payload(result: &commands::PasteResult) -> Option<HudPayload> {
+fn quick_copy_success_payload(
+    direction: QuickPasteDirection,
+    result: &commands::PasteResult,
+) -> Option<HudPayload> {
     if !result.success {
         return None;
     }
 
+    let hud_direction = match direction {
+        QuickPasteDirection::Older => HudDirection::Prev,
+        QuickPasteDirection::Newer => HudDirection::Next,
+    };
     result
         .item
         .as_ref()
-        .map(|item| HudPayload::copy_success(item.content_type, item.preview.clone()))
+        .map(|item| HudPayload::quick_paste(hud_direction, item.content_type, item.preview.clone()))
 }
 
 fn quick_copy(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()> {
     let state = app.state::<AppState>();
-    let Some(result) = copy_quick_history_item(state.inner(), direction, |item| {
+    let Some(result) = wheel_quick_history_item(state.inner(), direction, |item| {
         paste::write_item_to_clipboard(app, item)
     })?
     else {
         return Ok(());
     };
 
-    if let Some(payload) = quick_copy_success_payload(&result) {
+    if let Some(payload) = quick_copy_success_payload(direction, &result) {
         commands::emit_hud_notification(app, payload);
     } else if !result.success {
         tracing::warn!(target: "hotkeys", "quick copy failed: {}", result.message);
-    }
-
-    if result.success {
-        let _ = app.emit(
-            events::HISTORY_REVISION,
-            commands::HistoryRevisionPayload {
-                revision: result.revision,
-            },
-        );
-    }
-    Ok(())
-}
-
-fn quick_paste(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()> {
-    let state = app.state::<AppState>();
-    let hud_direction = match direction {
-        QuickPasteDirection::Older => HudDirection::Prev,
-        QuickPasteDirection::Newer => HudDirection::Next,
-    };
-
-    let Some(result) = paste_quick_history_item(state.inner(), direction, |item| {
-        paste::write_clipboard_and_paste(app, item)
-    })?
-    else {
-        return Ok(());
-    };
-
-    if let Some(item) = result.item.as_ref() {
-        commands::emit_hud_notification(
-            app,
-            HudPayload::quick_paste(hud_direction, item.content_type, item.preview.clone()),
-        );
     }
 
     if result.success {
@@ -525,7 +496,7 @@ mod wheel {
     use tauri::AppHandle;
 
     use super::{
-        modifier_matches_state, quick_paste, wheel_direction_from_mouse_data, QuickPasteDirection,
+        modifier_matches_state, quick_copy, wheel_direction_from_mouse_data, QuickPasteDirection,
         WheelHookOptions, WHEEL_DEBOUNCE_MS,
     };
     use crate::{errors::AppResult, models::WheelShortcutScope, windows as app_windows};
@@ -691,8 +662,8 @@ mod wheel {
 
         if should_trigger {
             thread::spawn(move || {
-                if let Err(error) = quick_paste(&app, direction) {
-                    tracing::warn!(target: "hotkeys", "wheel quick paste failed: {error}");
+                if let Err(error) = quick_copy(&app, direction) {
+                    tracing::warn!(target: "hotkeys", "wheel quick copy failed: {error}");
                 }
             });
         }
@@ -827,53 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn quick_history_action_separates_copy_and_paste_helpers() {
-        let copy_state = AppState::new(repo());
-        let copy_older = copy_state
-            .repository()
-            .insert_clipboard_item(text_input("copy older", "hash-copy-older"))
-            .unwrap();
-        copy_state
-            .repository()
-            .insert_clipboard_item(text_input("copy newest", "hash-copy-newest"))
-            .unwrap();
-        let mut copied_id = None;
-
-        let copy_result =
-            copy_quick_history_item(&copy_state, QuickPasteDirection::Older, |item| {
-                copied_id = Some(item.id);
-                Ok(())
-            })
-            .unwrap()
-            .unwrap();
-
-        let paste_state = AppState::new(repo());
-        let paste_older = paste_state
-            .repository()
-            .insert_clipboard_item(text_input("paste older", "hash-paste-older"))
-            .unwrap();
-        paste_state
-            .repository()
-            .insert_clipboard_item(text_input("paste newest", "hash-paste-newest"))
-            .unwrap();
-        let mut pasted_id = None;
-
-        let paste_result =
-            paste_quick_history_item(&paste_state, QuickPasteDirection::Older, |item| {
-                pasted_id = Some(item.id);
-                Ok(())
-            })
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(copied_id, Some(copy_older.id));
-        assert_eq!(copy_result.message, "copied");
-        assert_eq!(pasted_id, Some(paste_older.id));
-        assert_eq!(paste_result.message, "pasted");
-    }
-
-    #[test]
-    fn quick_history_action_copy_hud_uses_copy_success_only_on_success() {
+    fn quick_history_action_hud_keeps_previous_next_direction_only_on_success() {
         let state = AppState::new(repo());
         state
             .repository()
@@ -887,11 +812,15 @@ mod tests {
         let result = copy_quick_history_item(&state, QuickPasteDirection::Older, |_| Ok(()))
             .unwrap()
             .unwrap();
-        let payload = quick_copy_success_payload(&result).unwrap();
+        let payload = quick_copy_success_payload(QuickPasteDirection::Older, &result).unwrap();
 
         assert_eq!(
             payload,
-            HudPayload::copy_success(ClipboardContentType::Text, "older".to_string())
+            HudPayload::quick_paste(
+                crate::models::HudDirection::Prev,
+                ClipboardContentType::Text,
+                "older".to_string()
+            )
         );
 
         let failed_state = AppState::new(repo());
@@ -911,7 +840,41 @@ mod tests {
         .unwrap();
 
         assert!(failed.item.is_some());
-        assert_eq!(quick_copy_success_payload(&failed), None);
+        assert_eq!(
+            quick_copy_success_payload(QuickPasteDirection::Older, &failed),
+            None
+        );
+    }
+
+    #[test]
+    fn wheel_quick_history_action_uses_copy_not_paste() {
+        let state = AppState::new(repo());
+        let older = state
+            .repository()
+            .insert_clipboard_item(text_input("older", "hash-wheel-copy-older"))
+            .unwrap();
+        state
+            .repository()
+            .insert_clipboard_item(text_input("newest", "hash-wheel-copy-newest"))
+            .unwrap();
+        let mut copied_id = None;
+
+        let result = wheel_quick_history_item(&state, QuickPasteDirection::Older, |item| {
+            copied_id = Some(item.id);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+        let stored = state
+            .repository()
+            .get_item_by_id(older.id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(copied_id, Some(older.id));
+        assert_eq!(result.message, "copied");
+        assert_eq!(stored.use_count, 1);
+        assert!(stored.last_used_at.is_some());
     }
 
     #[test]

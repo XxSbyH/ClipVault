@@ -23,6 +23,7 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { clipboardApi } from '@/lib/tauriApi';
+import { getHistoryFetchLimit } from '@/lib/historyLimit';
 import { cn } from '@/lib/utils';
 import { useClipboardStore } from '@/store/clipboardStore';
 
@@ -50,6 +51,16 @@ const HOTKEY_DESCRIPTIONS: Record<keyof HotkeySettings, string> = {
   clear: '清空非收藏历史记录',
   quickPastePrev: '复制更旧的历史内容到剪贴板',
   quickPasteNext: '复制更新的历史内容到剪贴板'
+};
+
+const HOTKEY_CONFLICT_LABELS: Record<string, string> = {
+  openPanel: HOTKEY_LABELS.openPanel,
+  search: HOTKEY_LABELS.search,
+  pause: HOTKEY_LABELS.pause,
+  clear: HOTKEY_LABELS.clear,
+  quickPastePrev: HOTKEY_LABELS.quickPastePrev,
+  quickPasteNext: HOTKEY_LABELS.quickPasteNext,
+  'fixed content candidate': '当前固定内容'
 };
 
 const NORMAL_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['openPanel', 'search', 'pause', 'clear'];
@@ -151,6 +162,111 @@ function formatHotkeyLabel(value: string): string {
     .filter(Boolean)
     .map((token) => DISPLAY_TOKEN_MAP[token] ?? token)
     .join('+');
+}
+
+function hotkeyComparisonKey(value: string): string {
+  const canonicalTokens = value
+    .split('+')
+    .map((token) => {
+      const trimmed = token.trim();
+      const lower = trimmed.toLowerCase();
+      if (lower === 'commandorcontrol' || lower === 'control' || lower === 'ctrl') {
+        return 'Ctrl';
+      }
+      if (lower === 'alt' || lower === 'option') {
+        return 'Alt';
+      }
+      if (lower === 'shift') {
+        return 'Shift';
+      }
+      if (['meta', 'command', 'cmd', 'super', 'win', 'windows'].includes(lower)) {
+        return 'Meta';
+      }
+      if (lower === 'arrowleft') {
+        return 'Left';
+      }
+      if (lower === 'arrowright') {
+        return 'Right';
+      }
+      if (lower === 'arrowup') {
+        return 'Up';
+      }
+      if (lower === 'arrowdown') {
+        return 'Down';
+      }
+      if (trimmed.length === 1) {
+        return trimmed.toUpperCase();
+      }
+      return trimmed;
+    })
+    .filter(Boolean);
+  return orderHotkeyTokens(canonicalTokens).join('+').toLowerCase();
+}
+
+function fixedContentConflictLabel(command: string): string {
+  if (HOTKEY_CONFLICT_LABELS[command]) {
+    return HOTKEY_CONFLICT_LABELS[command];
+  }
+  const fixedContentMatch = /^fixed content (\d+)$/.exec(command);
+  if (fixedContentMatch) {
+    return `固定内容 #${fixedContentMatch[1]}`;
+  }
+  return command;
+}
+
+function readableErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function fixedContentSaveErrorMessage(error: unknown): string {
+  const message = readableErrorMessage(error);
+  const conflictMatch = /^hotkey (.+) is assigned to both (.+) and (.+)$/.exec(message);
+  if (conflictMatch) {
+    const [, hotkey, firstCommand, secondCommand] = conflictMatch;
+    return `快捷键冲突：${formatHotkeyLabel(hotkey)} 已绑定到 ${fixedContentConflictLabel(firstCommand)} 和 ${fixedContentConflictLabel(secondCommand)}。`;
+  }
+  return `固定快捷内容保存失败：${message}`;
+}
+
+function findFixedContentHotkeyConflict(
+  hotkey: string,
+  enabled: boolean,
+  currentId: number | null,
+  hotkeys: HotkeySettings,
+  fixedContents: FixedContent[]
+): string | null {
+  if (!enabled) {
+    return null;
+  }
+
+  const candidateKey = hotkeyComparisonKey(hotkey);
+  for (const key of Object.keys(hotkeys) as Array<keyof HotkeySettings>) {
+    if (hotkeyComparisonKey(hotkeys[key]) === candidateKey) {
+      return `快捷键冲突：${formatHotkeyLabel(hotkey)} 已绑定到 ${HOTKEY_LABELS[key]}。`;
+    }
+  }
+
+  const existingContent = fixedContents.find(
+    (content) =>
+      content.enabled &&
+      content.id !== currentId &&
+      hotkeyComparisonKey(content.hotkey) === candidateKey
+  );
+  if (existingContent) {
+    return `快捷键冲突：${formatHotkeyLabel(hotkey)} 已绑定到固定内容「${existingContent.title}」。`;
+  }
+
+  return null;
 }
 
 export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: SettingsPanelProps): JSX.Element {
@@ -347,7 +463,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       if (!result.success) {
         throw new Error(result.error || 'clear-history-failed');
       }
-      const latestItems = await clipboardApi.getHistory(300);
+      const latestItems = await clipboardApi.getHistory(getHistoryFetchLimit(safeSettings));
       setItems(latestItems);
       setClearState('success');
       setClearMessage(
@@ -478,6 +594,19 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
     setErrorMessage('');
 
     try {
+      const currentHotkeys = hotkeys ?? await clipboardApi.getHotkeys();
+      const conflictMessage = findFixedContentHotkeyConflict(
+        hotkey,
+        fixedContentEnabled,
+        editingFixedContent?.id ?? null,
+        currentHotkeys,
+        fixedContents
+      );
+      if (conflictMessage) {
+        setErrorMessage(conflictMessage);
+        return;
+      }
+
       try {
         const available = await clipboardApi.checkHotkeyAvailable(hotkey);
         if (available === false) {
@@ -505,8 +634,8 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
 
       await refreshFixedContents();
       resetFixedContentForm();
-    } catch {
-      setErrorMessage('固定快捷内容保存失败，请稍后重试。');
+    } catch (error) {
+      setErrorMessage(fixedContentSaveErrorMessage(error));
     } finally {
       setSavingFixedContent(false);
     }
@@ -1066,7 +1195,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">固定快捷内容</p>
-                  <p className="mt-1 text-xs text-muted-foreground">为常用文本绑定快捷键，触发后复制固定内容到剪贴板。</p>
+                  <p className="mt-1 text-xs text-muted-foreground">为常用文本绑定快捷键，触发后写入剪贴板并粘贴。</p>
                 </div>
                 <Button
                   size="sm"
@@ -1177,7 +1306,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                       className="min-h-24 w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-teal-300 focus:ring-2 focus:ring-teal-100"
                       value={fixedContentValue}
                       onChange={(event) => setFixedContentValue(event.target.value)}
-                      placeholder="输入要复制的固定内容"
+                      placeholder="输入要粘贴的固定内容"
                     />
                   </label>
                   <div className="flex flex-wrap items-center justify-between gap-3">
