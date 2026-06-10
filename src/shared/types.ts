@@ -122,7 +122,7 @@ export interface FixedContent {
   id: number;
   title: string;
   content: string;
-  hotkey: string | null;
+  hotkey: string;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
@@ -133,7 +133,7 @@ export interface FixedContent {
 export interface FixedContentInput {
   title: string;
   content: string;
-  hotkey?: string | null;
+  hotkey: string;
   enabled: boolean;
 }
 

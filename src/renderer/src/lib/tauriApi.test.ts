@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BlacklistApp, ClipboardItem } from '@shared/types';
+import type { BlacklistApp, ClipboardItem, FixedContent, FixedContentInput } from '@shared/types';
 
 const { invokeMock, listenMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -217,3 +217,17 @@ function makeBlacklistApp(id: number, appName: string, isBuiltin: boolean): Blac
     createdAt: 1_700_000_000 + id
   };
 }
+
+type Expect<T extends true> = T;
+type IsExactlyString<T> = [T] extends [string] ? ([string] extends [T] ? true : false) : false;
+type IsRequired<T, K extends keyof T> = {} extends Pick<T, K> ? false : true;
+
+const fixedContentHotkeyTypeCheck: Expect<IsExactlyString<FixedContent['hotkey']>> = true;
+const fixedContentInputHotkeyTypeCheck: Expect<IsExactlyString<FixedContentInput['hotkey']>> = true;
+const fixedContentInputHotkeyRequiredTypeCheck: Expect<
+  IsRequired<FixedContentInput, 'hotkey'>
+> = true;
+
+void fixedContentHotkeyTypeCheck;
+void fixedContentInputHotkeyTypeCheck;
+void fixedContentInputHotkeyRequiredTypeCheck;
