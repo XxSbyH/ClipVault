@@ -20,6 +20,12 @@ pub fn write_clipboard_and_paste(app: &AppHandle, item: &ClipboardItem) -> AppRe
     simulate_ctrl_v_after_delay(Duration::from_millis(120))
 }
 
+pub fn write_text_and_paste(app: &AppHandle, text: &str) -> AppResult<()> {
+    write_text_to_clipboard(app, text)?;
+    hide_main_window(app);
+    simulate_ctrl_v_after_delay(Duration::from_millis(120))
+}
+
 pub fn write_item_to_clipboard(app: &AppHandle, item: &ClipboardItem) -> AppResult<()> {
     match item.content_type {
         ClipboardContentType::Text
@@ -30,9 +36,7 @@ pub fn write_item_to_clipboard(app: &AppHandle, item: &ClipboardItem) -> AppResu
             let Some(content) = item.content.as_deref() else {
                 return Err(AppError::from("clipboard item has no text content"));
             };
-            app.clipboard()
-                .write_text(content)
-                .map_err(|err| AppError::from(format!("failed to write clipboard text: {err}")))
+            write_text_to_clipboard(app, content)
         }
         ClipboardContentType::File => {
             let Some(path) = item.file_path.as_deref().or(item.content.as_deref()) else {
@@ -54,6 +58,12 @@ pub fn write_item_to_clipboard(app: &AppHandle, item: &ClipboardItem) -> AppResu
                 .map_err(|err| AppError::from(format!("failed to write clipboard image: {err}")))
         }
     }
+}
+
+fn write_text_to_clipboard(app: &AppHandle, text: &str) -> AppResult<()> {
+    app.clipboard()
+        .write_text(text)
+        .map_err(|err| AppError::from(format!("failed to write clipboard text: {err}")))
 }
 
 fn hide_main_window(app: &AppHandle) {

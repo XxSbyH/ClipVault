@@ -18,9 +18,9 @@ use crate::{
     events,
     hotkeys::{self, QuickPasteCursor, QuickPasteCursorSnapshot},
     models::{
-        AppSettings, BlacklistApp, ClipboardContentType, ClipboardItem, HotkeySettings,
-        HotkeySettingsPatch, HudDirection, HudPayload, MonitoringStatus, WheelShortcutModifier,
-        WheelShortcutScope,
+        AppSettings, BlacklistApp, ClipboardContentType, ClipboardItem, FixedContent,
+        FixedContentInput, HotkeySettings, HotkeySettingsPatch, HudDirection, HudPayload,
+        MonitoringStatus, WheelShortcutModifier, WheelShortcutScope,
     },
     paste, settings, windows,
 };
@@ -330,12 +330,137 @@ pub fn remove_blacklist_impl(state: &AppState, id: i64) -> AppResult<Vec<Blackli
     state.repository().list_blacklist_apps()
 }
 
+pub fn validate_fixed_content_input(input: &FixedContentInput) -> AppResult<FixedContentInput> {
+    let title = input.title.trim().to_string();
+    if title.is_empty() {
+        return Err(AppError::from("fixed content title cannot be empty"));
+    }
+
+    let content = input.content.trim().to_string();
+    if content.is_empty() {
+        return Err(AppError::from("fixed content content cannot be empty"));
+    }
+
+    let hotkey = input.hotkey.trim().to_string();
+    if hotkey.is_empty() {
+        return Err(AppError::from("fixed content hotkey cannot be empty"));
+    }
+    parse_hotkey_id("fixed content", &hotkey)?;
+
+    Ok(FixedContentInput {
+        title,
+        content,
+        hotkey,
+        enabled: input.enabled,
+    })
+}
+
+pub fn validate_fixed_content_hotkey_conflicts(
+    state: &AppState,
+    current_id: Option<i64>,
+    input: &FixedContentInput,
+) -> AppResult<()> {
+    if !input.enabled {
+        return Ok(());
+    }
+
+    let settings = state.repository().get_hotkey_settings()?;
+    let mut assignments = BTreeMap::new();
+    add_hotkey_settings_assignments(&mut assignments, &settings)?;
+
+    for content in state.repository().list_fixed_contents()? {
+        if !content.enabled || Some(content.id) == current_id {
+            continue;
+        }
+        add_hotkey_assignment(
+            &mut assignments,
+            &format!("fixed content {}", content.id),
+            &content.hotkey,
+        )?;
+    }
+
+    add_hotkey_assignment(&mut assignments, "fixed content candidate", &input.hotkey)
+}
+
+pub fn validate_hotkey_settings_conflicts_with_fixed_contents(
+    state: &AppState,
+    settings: &HotkeySettings,
+) -> AppResult<()> {
+    let mut assignments = BTreeMap::new();
+    add_hotkey_settings_assignments(&mut assignments, settings)?;
+
+    for content in state.repository().list_fixed_contents()? {
+        if content.enabled {
+            add_hotkey_assignment(
+                &mut assignments,
+                &format!("fixed content {}", content.id),
+                &content.hotkey,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub fn list_fixed_contents_impl(state: &AppState) -> AppResult<Vec<FixedContent>> {
+    state.repository().list_fixed_contents()
+}
+
+pub fn create_fixed_content_impl(
+    state: &AppState,
+    input: FixedContentInput,
+) -> AppResult<FixedContent> {
+    let input = validate_fixed_content_input(&input)?;
+    validate_fixed_content_hotkey_conflicts(state, None, &input)?;
+    state.repository().create_fixed_content(&input)
+}
+
+pub fn update_fixed_content_impl(
+    state: &AppState,
+    id: i64,
+    input: FixedContentInput,
+) -> AppResult<FixedContent> {
+    let input = validate_fixed_content_input(&input)?;
+    validate_fixed_content_hotkey_conflicts(state, Some(id), &input)?;
+    state
+        .repository()
+        .update_fixed_content(id, &input)?
+        .ok_or_else(|| AppError::from(format!("fixed content {id} not found")))
+}
+
+pub fn delete_fixed_content_impl(state: &AppState, id: i64) -> AppResult<()> {
+    if state.repository().delete_fixed_content(id)? {
+        Ok(())
+    } else {
+        Err(AppError::from(format!("fixed content {id} not found")))
+    }
+}
+
+pub fn trigger_fixed_content_impl<F>(
+    state: &AppState,
+    id: i64,
+    paste: F,
+) -> AppResult<Option<FixedContent>>
+where
+    F: FnOnce(&FixedContent) -> AppResult<()>,
+{
+    let Some(content) = state.repository().get_fixed_content_by_id(id)? else {
+        return Ok(None);
+    };
+    if !content.enabled {
+        return Ok(None);
+    }
+
+    paste(&content)?;
+    state.repository().increment_fixed_content_use_stats(id)
+}
+
 pub fn update_hotkeys_impl(
     state: &AppState,
     patch: HotkeySettingsPatch,
 ) -> AppResult<HotkeySettings> {
     let current = state.repository().get_hotkey_settings()?;
     let candidate = build_hotkey_settings_candidate(&current, &patch)?;
+    validate_hotkey_settings_conflicts_with_fixed_contents(state, &candidate)?;
     state
         .repository()
         .update_hotkey_settings(&HotkeySettingsPatch::from(&candidate))
@@ -592,6 +717,115 @@ pub fn remove_blacklist(state: State<'_, AppState>, id: i64) -> AppResult<Vec<Bl
 }
 
 #[tauri::command]
+pub fn list_fixed_contents(state: State<'_, AppState>) -> AppResult<Vec<FixedContent>> {
+    list_fixed_contents_impl(state.inner())
+}
+
+#[tauri::command]
+pub fn create_fixed_content(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: FixedContentInput,
+) -> AppResult<FixedContent> {
+    let created = create_fixed_content_impl(state.inner(), input)?;
+
+    if let Err(error) = hotkeys::replace_all_keyboard_shortcuts(&app, state.inner()) {
+        if let Err(rollback_error) = state.repository().delete_fixed_content(created.id) {
+            return Err(AppError::from(format!(
+                "{error}; failed to rollback fixed content create: {rollback_error}"
+            )));
+        }
+        if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
+            return Err(with_restore_error(error, restore_error));
+        }
+        return Err(error);
+    }
+
+    Ok(created)
+}
+
+#[tauri::command]
+pub fn update_fixed_content(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    input: FixedContentInput,
+) -> AppResult<FixedContent> {
+    let candidate_input = validate_fixed_content_input(&input)?;
+    validate_fixed_content_hotkey_conflicts(state.inner(), Some(id), &candidate_input)?;
+
+    let settings = state.repository().get_hotkey_settings()?;
+    let mut fixed_contents = state.repository().list_fixed_contents()?;
+    let mut found = false;
+    for content in &mut fixed_contents {
+        if content.id == id {
+            content.title = candidate_input.title.clone();
+            content.content = candidate_input.content.clone();
+            content.hotkey = candidate_input.hotkey.clone();
+            content.enabled = candidate_input.enabled;
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return Err(AppError::from(format!("fixed content {id} not found")));
+    }
+
+    if let Err(error) =
+        hotkeys::replace_keyboard_shortcuts_with_fixed_contents(&app, &settings, &fixed_contents)
+    {
+        if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
+            return Err(with_restore_error(error, restore_error));
+        }
+        return Err(error);
+    }
+
+    match update_fixed_content_impl(state.inner(), id, input) {
+        Ok(content) => Ok(content),
+        Err(error) => {
+            if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
+                return Err(with_restore_error(error, restore_error));
+            }
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn delete_fixed_content(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<()> {
+    let settings = state.repository().get_hotkey_settings()?;
+    let fixed_contents = state.repository().list_fixed_contents()?;
+    if !fixed_contents.iter().any(|content| content.id == id) {
+        return Err(AppError::from(format!("fixed content {id} not found")));
+    }
+    let candidate_contents: Vec<FixedContent> = fixed_contents
+        .into_iter()
+        .filter(|content| content.id != id)
+        .collect();
+
+    if let Err(error) = hotkeys::replace_keyboard_shortcuts_with_fixed_contents(
+        &app,
+        &settings,
+        &candidate_contents,
+    ) {
+        if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
+            return Err(with_restore_error(error, restore_error));
+        }
+        return Err(error);
+    }
+
+    match delete_fixed_content_impl(state.inner(), id) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
+                return Err(with_restore_error(error, restore_error));
+            }
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn get_hotkeys(state: State<'_, AppState>) -> AppResult<HotkeySettings> {
     state.repository().get_hotkey_settings()
 }
@@ -614,12 +848,14 @@ pub fn update_hotkeys(
 ) -> AppResult<HotkeySettings> {
     let current = state.repository().get_hotkey_settings()?;
     let candidate = build_hotkey_settings_candidate(&current, &patch)?;
+    validate_hotkey_settings_conflicts_with_fixed_contents(state.inner(), &candidate)?;
+    let fixed_contents = state.repository().list_fixed_contents()?;
 
-    if let Err(error) = hotkeys::replace_keyboard_shortcuts(&app, &candidate) {
-        if let Err(rollback_error) = hotkeys::replace_keyboard_shortcuts(&app, &current) {
-            return Err(AppError::from(format!(
-                "{error}; failed to restore previous hotkeys: {rollback_error}"
-            )));
+    if let Err(error) =
+        hotkeys::replace_keyboard_shortcuts_with_fixed_contents(&app, &candidate, &fixed_contents)
+    {
+        if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
+            return Err(with_restore_error(error, restore_error));
         }
         return Err(error);
     }
@@ -630,11 +866,8 @@ pub fn update_hotkeys(
     {
         Ok(hotkeys) => Ok(hotkeys),
         Err(error) => {
-            if let Err(rollback_error) = hotkeys::replace_keyboard_shortcuts(&app, &current) {
-                tracing::error!(
-                    target: "hotkeys",
-                    "failed to restore previous hotkeys after persistence error: {rollback_error}"
-                );
+            if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
+                return Err(with_restore_error(error, restore_error));
             }
             Err(error)
         }
@@ -783,6 +1016,16 @@ fn restore_wheel_hook(app: &AppHandle, settings: &AppSettings) {
     }
 }
 
+fn restore_all_keyboard_shortcuts(app: &AppHandle, state: &AppState) -> AppResult<()> {
+    hotkeys::replace_all_keyboard_shortcuts(app, state)
+}
+
+fn with_restore_error(error: AppError, restore_error: AppError) -> AppError {
+    AppError::from(format!(
+        "{error}; failed to restore previous hotkeys: {restore_error}"
+    ))
+}
+
 fn monitoring_status(monitoring: &MonitoringRuntimeState) -> MonitoringStatus {
     MonitoringStatus {
         monitor_enabled: monitoring.monitor_enabled,
@@ -846,6 +1089,55 @@ fn metadata_mime_type(item: &ClipboardItem) -> Option<&'static str> {
     None
 }
 
+fn parse_hotkey_id(command: &str, accelerator: &str) -> AppResult<u32> {
+    accelerator
+        .trim()
+        .parse::<tauri_plugin_global_shortcut::Shortcut>()
+        .map(|shortcut| shortcut.id())
+        .map_err(|error| {
+            AppError::from(format!(
+                "invalid hotkey {command}={}: {error}",
+                accelerator.trim()
+            ))
+        })
+}
+
+fn add_hotkey_settings_assignments(
+    assignments: &mut BTreeMap<u32, String>,
+    settings: &HotkeySettings,
+) -> AppResult<()> {
+    for (command, accelerator) in hotkey_settings_entries(settings) {
+        add_hotkey_assignment(assignments, command, accelerator)?;
+    }
+    Ok(())
+}
+
+fn add_hotkey_assignment(
+    assignments: &mut BTreeMap<u32, String>,
+    command: &str,
+    accelerator: &str,
+) -> AppResult<()> {
+    let id = parse_hotkey_id(command, accelerator)?;
+    if let Some(existing) = assignments.insert(id, command.to_string()) {
+        return Err(AppError::from(format!(
+            "hotkey {} is assigned to both {existing} and {command}",
+            accelerator.trim()
+        )));
+    }
+    Ok(())
+}
+
+fn hotkey_settings_entries(settings: &HotkeySettings) -> Vec<(&'static str, &str)> {
+    vec![
+        ("openPanel", &settings.open_panel),
+        ("search", &settings.search),
+        ("pause", &settings.pause),
+        ("clear", &settings.clear),
+        ("quickPastePrev", &settings.quick_paste_prev),
+        ("quickPasteNext", &settings.quick_paste_next),
+    ]
+}
+
 fn hotkey_patch_entries(patch: &HotkeySettingsPatch) -> Vec<(&'static str, &str)> {
     let mut entries = Vec::new();
     if let Some(value) = patch.open_panel.as_deref() {
@@ -877,7 +1169,8 @@ mod tests {
         database::repository::Repository,
         errors::AppError,
         models::{
-            ClipboardContentType, ClipboardInsertInput, ClipboardMetadata, HotkeySettingsPatch,
+            ClipboardContentType, ClipboardInsertInput, ClipboardMetadata, FixedContentInput,
+            HotkeySettingsPatch,
         },
     };
 
@@ -907,6 +1200,20 @@ mod tests {
             metadata: Some(ClipboardMetadata::default()),
             file_path: None,
             image_data: Some(image_data),
+        }
+    }
+
+    fn fixed_content_input(
+        title: &str,
+        content: &str,
+        hotkey: &str,
+        enabled: bool,
+    ) -> FixedContentInput {
+        FixedContentInput {
+            title: title.to_string(),
+            content: content.to_string(),
+            hotkey: hotkey.to_string(),
+            enabled,
         }
     }
 
@@ -1085,6 +1392,166 @@ mod tests {
 
         assert_eq!(settings.text_limit_kb, 64);
         assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn fixed_content_candidate_rejects_blank_and_invalid_values() {
+        let blank_title = super::validate_fixed_content_input(&fixed_content_input(
+            "  ", "content", "Ctrl+1", true,
+        ))
+        .unwrap_err();
+        assert!(blank_title.to_string().contains("title"));
+
+        let blank_content = super::validate_fixed_content_input(&fixed_content_input(
+            "Title", "  ", "Ctrl+1", true,
+        ))
+        .unwrap_err();
+        assert!(blank_content.to_string().contains("content"));
+
+        let blank_hotkey = super::validate_fixed_content_input(&fixed_content_input(
+            "Title", "content", "  ", true,
+        ))
+        .unwrap_err();
+        assert!(blank_hotkey.to_string().contains("hotkey"));
+
+        let invalid = super::validate_fixed_content_input(&fixed_content_input(
+            "Title", "content", "nope", true,
+        ))
+        .unwrap_err();
+        assert!(invalid.to_string().contains("invalid hotkey"));
+
+        let trimmed = super::validate_fixed_content_input(&fixed_content_input(
+            " Title ",
+            " content ",
+            " Ctrl+1 ",
+            true,
+        ))
+        .unwrap();
+        assert_eq!(trimmed.title, "Title");
+        assert_eq!(trimmed.content, "content");
+        assert_eq!(trimmed.hotkey, "Ctrl+1");
+    }
+
+    #[test]
+    fn fixed_content_conflicts_with_existing_enabled_hotkeys() {
+        let state = super::AppState::new(repo());
+        state
+            .repository()
+            .create_fixed_content(&fixed_content_input("Disabled", "A", "Ctrl+1", false))
+            .unwrap();
+        let enabled = state
+            .repository()
+            .create_fixed_content(&fixed_content_input("Enabled", "B", "Ctrl+2", true))
+            .unwrap();
+
+        let disabled_duplicate = fixed_content_input("New", "C", "Ctrl+1", true);
+        assert!(
+            super::validate_fixed_content_hotkey_conflicts(&state, None, &disabled_duplicate)
+                .is_ok()
+        );
+
+        let normal_duplicate = fixed_content_input("New", "C", "CommandOrControl+Shift+V", true);
+        assert!(
+            super::validate_fixed_content_hotkey_conflicts(&state, None, &normal_duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("openPanel")
+        );
+
+        let fixed_duplicate = fixed_content_input("New", "C", "Ctrl+2", true);
+        assert!(
+            super::validate_fixed_content_hotkey_conflicts(&state, None, &fixed_duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("fixed content")
+        );
+
+        let self_update = fixed_content_input("Enabled", "B", "Ctrl+2", true);
+        assert!(super::validate_fixed_content_hotkey_conflicts(
+            &state,
+            Some(enabled.id),
+            &self_update
+        )
+        .is_ok());
+
+        let disabled_input = fixed_content_input("Disabled Duplicate", "C", "Ctrl+2", false);
+        assert!(
+            super::validate_fixed_content_hotkey_conflicts(&state, None, &disabled_input).is_ok()
+        );
+    }
+
+    #[test]
+    fn fixed_content_trigger_updates_usage_after_successful_paste() {
+        let state = super::AppState::new(repo());
+        let fixed = state
+            .repository()
+            .create_fixed_content(&fixed_content_input("Greeting", "Hello", "Ctrl+1", true))
+            .unwrap();
+        let mut pasted = None;
+
+        let result = super::trigger_fixed_content_impl(&state, fixed.id, |content| {
+            pasted = Some(content.content.clone());
+            Ok(())
+        })
+        .unwrap();
+        let stored = state
+            .repository()
+            .get_fixed_content_by_id(fixed.id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(pasted.as_deref(), Some("Hello"));
+        assert_eq!(result.as_ref().map(|content| content.use_count), Some(1));
+        assert_eq!(stored.use_count, 1);
+        assert!(stored.last_used_at.is_some());
+    }
+
+    #[test]
+    fn fixed_content_trigger_skips_disabled_content() {
+        let state = super::AppState::new(repo());
+        let fixed = state
+            .repository()
+            .create_fixed_content(&fixed_content_input("Greeting", "Hello", "Ctrl+1", false))
+            .unwrap();
+        let mut pasted = false;
+
+        let result = super::trigger_fixed_content_impl(&state, fixed.id, |_| {
+            pasted = true;
+            Ok(())
+        })
+        .unwrap();
+        let stored = state
+            .repository()
+            .get_fixed_content_by_id(fixed.id)
+            .unwrap()
+            .unwrap();
+
+        assert!(result.is_none());
+        assert!(!pasted);
+        assert_eq!(stored.use_count, 0);
+        assert_eq!(stored.last_used_at, None);
+    }
+
+    #[test]
+    fn fixed_content_trigger_failure_does_not_update_usage() {
+        let state = super::AppState::new(repo());
+        let fixed = state
+            .repository()
+            .create_fixed_content(&fixed_content_input("Greeting", "Hello", "Ctrl+1", true))
+            .unwrap();
+
+        let result = super::trigger_fixed_content_impl(&state, fixed.id, |_| {
+            Err(AppError::from("paste failed"))
+        });
+        let stored = state
+            .repository()
+            .get_fixed_content_by_id(fixed.id)
+            .unwrap()
+            .unwrap();
+
+        assert!(result.unwrap_err().to_string().contains("paste failed"));
+        assert_eq!(stored.use_count, 0);
+        assert_eq!(stored.last_used_at, None);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::{
     errors::{AppError, AppResult},
     events,
     models::{
-        AppSettings, ClipboardItem, HotkeySettings, HudDirection, HudPayload,
+        AppSettings, ClipboardItem, FixedContent, HotkeySettings, HudDirection, HudPayload,
         WheelShortcutModifier, WheelShortcutScope,
     },
     paste, windows,
@@ -75,9 +75,8 @@ pub fn head_id(items: &[ClipboardItem]) -> Option<i64> {
 }
 
 pub fn register_global_shortcuts(app: &AppHandle) -> AppResult<()> {
-    let settings = app.state::<AppState>().repository().get_hotkey_settings()?;
-
-    replace_keyboard_shortcuts(app, &settings)?;
+    let state = app.state::<AppState>();
+    replace_all_keyboard_shortcuts(app, state.inner())?;
     if let Err(error) = start_wheel_hook(app) {
         tracing::warn!(
             target: "hotkeys",
@@ -87,12 +86,28 @@ pub fn register_global_shortcuts(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
+pub fn replace_all_keyboard_shortcuts(app: &AppHandle, state: &AppState) -> AppResult<()> {
+    let settings = state.repository().get_hotkey_settings()?;
+    let fixed_contents = state.repository().list_fixed_contents()?;
+    replace_keyboard_shortcuts_with_fixed_contents(app, &settings, &fixed_contents)
+}
+
 pub fn replace_keyboard_shortcuts(app: &AppHandle, settings: &HotkeySettings) -> AppResult<()> {
-    validate_hotkey_settings(settings)?;
+    replace_keyboard_shortcuts_with_fixed_contents(app, settings, &[])
+}
+
+pub fn replace_keyboard_shortcuts_with_fixed_contents(
+    app: &AppHandle,
+    settings: &HotkeySettings,
+    fixed_contents: &[FixedContent],
+) -> AppResult<()> {
+    validate_keyboard_shortcuts(settings, fixed_contents)?;
     app.global_shortcut()
         .unregister_all()
         .map_err(|err| AppError::from(format!("failed to unregister hotkeys: {err}")))?;
-    if let Err(error) = register_keyboard_shortcuts(app, settings) {
+    if let Err(error) =
+        register_keyboard_shortcuts_with_fixed_contents(app, settings, fixed_contents)
+    {
         let _ = app.global_shortcut().unregister_all();
         return Err(error);
     }
@@ -100,23 +115,46 @@ pub fn replace_keyboard_shortcuts(app: &AppHandle, settings: &HotkeySettings) ->
 }
 
 pub fn validate_hotkey_settings(settings: &HotkeySettings) -> AppResult<()> {
-    let mut by_hotkey: BTreeMap<String, &'static str> = BTreeMap::new();
-    for (command, accelerator, _) in keyboard_shortcut_entries(settings) {
-        let accelerator = accelerator.trim();
-        if accelerator.is_empty() {
-            return Err(AppError::from(format!("hotkey {command} cannot be empty")));
-        }
-        accelerator
-            .parse::<tauri_plugin_global_shortcut::Shortcut>()
-            .map_err(|error| {
-                AppError::from(format!("invalid hotkey {command}={accelerator}: {error}"))
-            })?;
+    validate_keyboard_shortcuts(settings, &[])
+}
 
-        if let Some(existing) = by_hotkey.insert(accelerator.to_string(), command) {
-            return Err(AppError::from(format!(
-                "hotkey {accelerator} is assigned to both {existing} and {command}"
-            )));
-        }
+fn validate_keyboard_shortcuts(
+    settings: &HotkeySettings,
+    fixed_contents: &[FixedContent],
+) -> AppResult<()> {
+    let mut by_hotkey: BTreeMap<u32, String> = BTreeMap::new();
+    for (command, accelerator, _) in keyboard_shortcut_entries(settings) {
+        add_shortcut_assignment(&mut by_hotkey, command, accelerator)?;
+    }
+    for content in fixed_contents.iter().filter(|content| content.enabled) {
+        add_shortcut_assignment(
+            &mut by_hotkey,
+            &format!("fixed content {}", content.id),
+            &content.hotkey,
+        )?;
+    }
+    Ok(())
+}
+
+fn add_shortcut_assignment(
+    by_hotkey: &mut BTreeMap<u32, String>,
+    command: &str,
+    accelerator: &str,
+) -> AppResult<()> {
+    let accelerator = accelerator.trim();
+    if accelerator.is_empty() {
+        return Err(AppError::from(format!("hotkey {command} cannot be empty")));
+    }
+    let shortcut = accelerator
+        .parse::<tauri_plugin_global_shortcut::Shortcut>()
+        .map_err(|error| {
+            AppError::from(format!("invalid hotkey {command}={accelerator}: {error}"))
+        })?;
+
+    if let Some(existing) = by_hotkey.insert(shortcut.id(), command.to_string()) {
+        return Err(AppError::from(format!(
+            "hotkey {accelerator} is assigned to both {existing} and {command}"
+        )));
     }
     Ok(())
 }
@@ -207,6 +245,7 @@ enum HotkeyAction {
     Pause,
     Clear,
     QuickPaste(QuickPasteDirection),
+    FixedContent(i64),
 }
 
 fn keyboard_shortcut_entries(settings: &HotkeySettings) -> Vec<(&'static str, &str, HotkeyAction)> {
@@ -228,9 +267,16 @@ fn keyboard_shortcut_entries(settings: &HotkeySettings) -> Vec<(&'static str, &s
     ]
 }
 
-fn register_keyboard_shortcuts(app: &AppHandle, settings: &HotkeySettings) -> AppResult<()> {
+fn register_keyboard_shortcuts_with_fixed_contents(
+    app: &AppHandle,
+    settings: &HotkeySettings,
+    fixed_contents: &[FixedContent],
+) -> AppResult<()> {
     for (_, accelerator, action) in keyboard_shortcut_entries(settings) {
         register_shortcut(app, accelerator, action)?;
+    }
+    for content in fixed_contents.iter().filter(|content| content.enabled) {
+        register_shortcut(app, &content.hotkey, HotkeyAction::FixedContent(content.id))?;
     }
     Ok(())
 }
@@ -298,7 +344,25 @@ fn handle_hotkey_action(app: &AppHandle, action: HotkeyAction) {
         HotkeyAction::QuickPaste(direction) => {
             let _ = quick_copy(app, direction);
         }
+        HotkeyAction::FixedContent(id) => {
+            if let Err(error) = paste_fixed_content(app, id) {
+                tracing::warn!(target: "hotkeys", "fixed content paste failed: {error}");
+            }
+        }
     }
+}
+
+fn paste_fixed_content(app: &AppHandle, id: i64) -> AppResult<()> {
+    let state = app.state::<AppState>();
+    let Some(content) = commands::trigger_fixed_content_impl(state.inner(), id, |content| {
+        paste::write_text_and_paste(app, &content.content)
+    })?
+    else {
+        return Ok(());
+    };
+
+    commands::emit_hud_notification(app, HudPayload::panel("Fixed content", &content.title));
+    Ok(())
 }
 
 fn resolve_quick_history_item(
