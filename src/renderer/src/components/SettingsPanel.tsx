@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Monitor, Moon, SlidersHorizontal, Sun, X } from 'lucide-react';
-import { DEFAULT_HOTKEYS, type AppSettings, type BlacklistApp, type HotkeySettings } from '@shared/types';
+import {
+  DEFAULT_HOTKEYS,
+  type AppSettings,
+  type BlacklistApp,
+  type FixedContent,
+  type FixedContentInput,
+  type HotkeySettings
+} from '@shared/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -32,8 +39,8 @@ const HOTKEY_LABELS: Record<keyof HotkeySettings, string> = {
   search: '聚焦搜索',
   pause: '暂停/恢复监听',
   clear: '清空历史',
-  quickPastePrev: '快速粘贴上一项',
-  quickPasteNext: '快速粘贴下一项'
+  quickPastePrev: '复制上一项历史',
+  quickPasteNext: '复制下一项历史'
 };
 
 const HOTKEY_DESCRIPTIONS: Record<keyof HotkeySettings, string> = {
@@ -41,8 +48,8 @@ const HOTKEY_DESCRIPTIONS: Record<keyof HotkeySettings, string> = {
   search: '打开面板并自动聚焦搜索框',
   pause: '临时暂停或恢复剪贴板监听',
   clear: '清空非收藏历史记录',
-  quickPastePrev: '无需打开面板，直接粘贴更旧的内容',
-  quickPasteNext: '无需打开面板，向更新的历史前进'
+  quickPastePrev: '复制更旧的历史内容到剪贴板',
+  quickPasteNext: '复制更新的历史内容到剪贴板'
 };
 
 const NORMAL_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['openPanel', 'search', 'pause', 'clear'];
@@ -160,24 +167,49 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
   const [editingHotkey, setEditingHotkey] = useState<keyof HotkeySettings | null>(null);
   const [hotkeyConflicts, setHotkeyConflicts] = useState<string[]>([]);
   const [recordingPreview, setRecordingPreview] = useState('');
+  const [fixedContents, setFixedContents] = useState<FixedContent[]>([]);
+  const [showFixedContentForm, setShowFixedContentForm] = useState(false);
+  const [editingFixedContent, setEditingFixedContent] = useState<FixedContent | null>(null);
+  const [fixedContentTitle, setFixedContentTitle] = useState('');
+  const [fixedContentValue, setFixedContentValue] = useState('');
+  const [fixedContentHotkey, setFixedContentHotkey] = useState('');
+  const [fixedContentEnabled, setFixedContentEnabled] = useState(true);
+  const [recordingFixedContentHotkey, setRecordingFixedContentHotkey] = useState(false);
+  const [fixedContentRecordingPreview, setFixedContentRecordingPreview] = useState('');
+  const [savingFixedContent, setSavingFixedContent] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [clearState, setClearState] = useState<'idle' | 'clearing' | 'success' | 'error'>('idle');
   const [clearMessage, setClearMessage] = useState('');
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const candidateComboRef = useRef('');
+  const fixedContentPressedKeysRef = useRef<Set<string>>(new Set());
+  const fixedContentCandidateComboRef = useRef('');
   const clearFeedbackTimerRef = useRef<number | null>(null);
   const settingsUpdateSeqRef = useRef<Partial<Record<keyof AppSettings, number>>>({});
   const hotkeyRecordSeqRef = useRef(0);
+  const fixedContentHotkeyRecordSeqRef = useRef(0);
   const openRef = useRef(open);
 
   useEffect(() => {
     openRef.current = open;
     if (!open) {
       hotkeyRecordSeqRef.current += 1;
+      fixedContentHotkeyRecordSeqRef.current += 1;
       setEditingHotkey(null);
       setRecordingPreview('');
       pressedKeysRef.current.clear();
       candidateComboRef.current = '';
+      setRecordingFixedContentHotkey(false);
+      setFixedContentRecordingPreview('');
+      fixedContentPressedKeysRef.current.clear();
+      fixedContentCandidateComboRef.current = '';
+      setShowFixedContentForm(false);
+      setEditingFixedContent(null);
+      setFixedContentTitle('');
+      setFixedContentValue('');
+      setFixedContentHotkey('');
+      setFixedContentEnabled(true);
+      setSavingFixedContent(false);
       setErrorMessage('');
       setClearState('idle');
       setClearMessage('');
@@ -227,6 +259,30 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       cancelled = true;
     };
   }, [open, initialTab, setSettings]);
+
+  useEffect(() => {
+    if (!open || activeTab !== 'hotkeys') {
+      return;
+    }
+
+    let cancelled = false;
+    void clipboardApi
+      .listFixedContents()
+      .then((contents) => {
+        if (!cancelled) {
+          setFixedContents(contents);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setErrorMessage('固定快捷内容加载失败，请稍后重试。');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, activeTab]);
 
   useEffect(() => {
     return () => {
@@ -336,6 +392,139 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       .catch(() => setErrorMessage('黑名单删除失败，请稍后重试。'));
   };
 
+  const refreshFixedContents = async () => {
+    const contents = await clipboardApi.listFixedContents();
+    setFixedContents(contents);
+  };
+
+  const resetFixedContentForm = () => {
+    fixedContentHotkeyRecordSeqRef.current += 1;
+    setRecordingFixedContentHotkey(false);
+    setFixedContentRecordingPreview('');
+    fixedContentPressedKeysRef.current.clear();
+    fixedContentCandidateComboRef.current = '';
+    setShowFixedContentForm(false);
+    setEditingFixedContent(null);
+    setFixedContentTitle('');
+    setFixedContentValue('');
+    setFixedContentHotkey('');
+    setFixedContentEnabled(true);
+  };
+
+  const openNewFixedContentForm = () => {
+    hotkeyRecordSeqRef.current += 1;
+    setEditingHotkey(null);
+    setRecordingPreview('');
+    pressedKeysRef.current.clear();
+    candidateComboRef.current = '';
+    fixedContentHotkeyRecordSeqRef.current += 1;
+    setRecordingFixedContentHotkey(false);
+    setFixedContentRecordingPreview('');
+    fixedContentPressedKeysRef.current.clear();
+    fixedContentCandidateComboRef.current = '';
+    setEditingFixedContent(null);
+    setFixedContentTitle('');
+    setFixedContentValue('');
+    setFixedContentHotkey('');
+    setFixedContentEnabled(true);
+    setShowFixedContentForm(true);
+    setErrorMessage('');
+  };
+
+  const openEditFixedContentForm = (content: FixedContent) => {
+    hotkeyRecordSeqRef.current += 1;
+    setEditingHotkey(null);
+    setRecordingPreview('');
+    pressedKeysRef.current.clear();
+    candidateComboRef.current = '';
+    fixedContentHotkeyRecordSeqRef.current += 1;
+    setRecordingFixedContentHotkey(false);
+    setFixedContentRecordingPreview('');
+    fixedContentPressedKeysRef.current.clear();
+    fixedContentCandidateComboRef.current = '';
+    setEditingFixedContent(content);
+    setFixedContentTitle(content.title);
+    setFixedContentValue(content.content);
+    setFixedContentHotkey(content.hotkey);
+    setFixedContentEnabled(content.enabled);
+    setShowFixedContentForm(true);
+    setErrorMessage('');
+  };
+
+  const startFixedContentHotkeyRecording = () => {
+    hotkeyRecordSeqRef.current += 1;
+    setEditingHotkey(null);
+    setRecordingPreview('');
+    pressedKeysRef.current.clear();
+    candidateComboRef.current = '';
+    fixedContentHotkeyRecordSeqRef.current += 1;
+    setRecordingFixedContentHotkey(true);
+    setFixedContentRecordingPreview('');
+    fixedContentPressedKeysRef.current.clear();
+    fixedContentCandidateComboRef.current = '';
+    setErrorMessage('');
+  };
+
+  const saveFixedContent = async () => {
+    const title = fixedContentTitle.trim();
+    const content = fixedContentValue;
+    const hotkey = fixedContentHotkey.trim();
+    if (!title || !content.trim() || !hotkey) {
+      setErrorMessage('请填写固定内容的标题、内容和快捷键。');
+      return;
+    }
+
+    setSavingFixedContent(true);
+    setErrorMessage('');
+
+    try {
+      try {
+        const available = await clipboardApi.checkHotkeyAvailable(hotkey);
+        if (available === false) {
+          const accepted = window.confirm(`快捷键 ${formatHotkeyLabel(hotkey)} 可能被其他应用占用，仍然保存吗？`);
+          if (!accepted) {
+            return;
+          }
+        }
+      } catch {
+        // 可用性检测只是保存前提示，最终冲突由后端创建/更新接口处理。
+      }
+
+      const input: FixedContentInput = {
+        title,
+        content,
+        hotkey,
+        enabled: fixedContentEnabled
+      };
+
+      if (editingFixedContent) {
+        await clipboardApi.updateFixedContent(editingFixedContent.id, input);
+      } else {
+        await clipboardApi.createFixedContent(input);
+      }
+
+      await refreshFixedContents();
+      resetFixedContentForm();
+    } catch {
+      setErrorMessage('固定快捷内容保存失败，请稍后重试。');
+    } finally {
+      setSavingFixedContent(false);
+    }
+  };
+
+  const deleteFixedContent = async (id: number) => {
+    setErrorMessage('');
+    try {
+      await clipboardApi.deleteFixedContent(id);
+      await refreshFixedContents();
+      if (editingFixedContent?.id === id) {
+        resetFixedContentForm();
+      }
+    } catch {
+      setErrorMessage('固定快捷内容删除失败，请稍后重试。');
+    }
+  };
+
   const resetHotkeys = () => {
     hotkeyRecordSeqRef.current += 1;
     setEditingHotkey(null);
@@ -359,6 +548,11 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
   };
 
   const startHotkeyRecording = (key: keyof HotkeySettings) => {
+    fixedContentHotkeyRecordSeqRef.current += 1;
+    setRecordingFixedContentHotkey(false);
+    setFixedContentRecordingPreview('');
+    fixedContentPressedKeysRef.current.clear();
+    fixedContentCandidateComboRef.current = '';
     hotkeyRecordSeqRef.current += 1;
     setHotkeyConflicts([]);
     setEditingHotkey(key);
@@ -478,6 +672,86 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [editingHotkey, hotkeys, open]);
+
+  useEffect(() => {
+    if (!open || !recordingFixedContentHotkey) {
+      return;
+    }
+
+    const updatePreviewFromPressed = () => {
+      const ordered = orderHotkeyTokens(Array.from(fixedContentPressedKeysRef.current));
+      setFixedContentRecordingPreview(ordered.join('+'));
+    };
+
+    const cancelFixedRecording = () => {
+      fixedContentHotkeyRecordSeqRef.current += 1;
+      setRecordingFixedContentHotkey(false);
+      setFixedContentRecordingPreview('');
+      fixedContentPressedKeysRef.current.clear();
+      fixedContentCandidateComboRef.current = '';
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === 'Escape') {
+        cancelFixedRecording();
+        return;
+      }
+
+      const token = normalizeRecordedKey(event.key);
+      if (!token) {
+        return;
+      }
+
+      if (!isModifierKey(token)) {
+        for (const key of Array.from(fixedContentPressedKeysRef.current)) {
+          if (!isModifierKey(key)) {
+            fixedContentPressedKeysRef.current.delete(key);
+          }
+        }
+      }
+
+      fixedContentPressedKeysRef.current.add(token);
+      const candidate = orderHotkeyTokens(Array.from(fixedContentPressedKeysRef.current)).join('+');
+      if (!isModifierKey(token)) {
+        fixedContentCandidateComboRef.current = candidate;
+      }
+      setFixedContentRecordingPreview(candidate);
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const token = normalizeRecordedKey(event.key);
+      if (!token) {
+        return;
+      }
+
+      if (!isModifierKey(token)) {
+        const combo =
+          fixedContentCandidateComboRef.current ||
+          orderHotkeyTokens(Array.from(fixedContentPressedKeysRef.current)).join('+');
+        if (combo) {
+          setFixedContentHotkey(combo);
+          cancelFixedRecording();
+        }
+        return;
+      }
+
+      fixedContentPressedKeysRef.current.delete(token);
+      updatePreviewFromPressed();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [open, recordingFixedContentHotkey]);
 
   return (
     <Dialog
@@ -780,13 +1054,167 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
               onRecord={startHotkeyRecording}
             />
             <HotkeyGroup
-              title="快速粘贴"
+              title="历史快速复制"
               keys={QUICK_PASTE_HOTKEY_KEYS}
               hotkeys={hotkeys}
               editingHotkey={editingHotkey}
               recordingPreview={recordingPreview}
               onRecord={startHotkeyRecording}
             />
+
+            <div className="space-y-3 rounded-[1.25rem] border border-slate-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">固定快捷内容</p>
+                  <p className="mt-1 text-xs text-muted-foreground">为常用文本绑定快捷键，触发后复制固定内容到剪贴板。</p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={openNewFixedContentForm}
+                >
+                  新增固定内容
+                </Button>
+              </div>
+
+              {fixedContents.length > 0 ? (
+                <div className="space-y-1">
+                  {fixedContents.map((content) => (
+                    <div
+                      key={content.id}
+                      className="grid gap-3 border-b border-slate-100 py-2 last:border-0 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{content.title}</p>
+                        <p className="truncate text-xs text-muted-foreground">{content.content}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-xl border border-teal-100 bg-teal-50 px-3 py-1.5 font-mono text-xs font-bold text-teal-900">
+                          {formatHotkeyLabel(content.hotkey)}
+                        </span>
+                        <Badge className={content.enabled ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-500'}>
+                          {content.enabled ? '已启用' : '已停用'}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`编辑固定内容 ${content.title}`}
+                          onClick={() => openEditFixedContentForm(content)}
+                        >
+                          编辑
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-600 hover:bg-red-50"
+                          aria-label={`删除固定内容 ${content.title}`}
+                          onClick={() => {
+                            void deleteFixedContent(content.id);
+                          }}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-muted-foreground">还没有固定快捷内容。</p>
+              )}
+
+              {showFixedContentForm ? (
+                <div className="space-y-3 border-t border-slate-100 pt-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label
+                      htmlFor="fixed-content-title"
+                      className="space-y-1 text-xs font-semibold text-muted-foreground"
+                    >
+                      <span>标题</span>
+                      <Input
+                        id="fixed-content-title"
+                        value={fixedContentTitle}
+                        onChange={(event) => setFixedContentTitle(event.target.value)}
+                        placeholder="例如：常用回复"
+                      />
+                    </label>
+                    <div className="space-y-1 text-xs font-semibold text-muted-foreground">
+                      <span>快捷键</span>
+                      <button
+                        type="button"
+                        aria-label={
+                          fixedContentHotkey
+                            ? `录制固定内容快捷键 ${formatHotkeyLabel(fixedContentHotkey)}`
+                            : '录制固定内容快捷键'
+                        }
+                        className="flex h-10 w-full items-center justify-center rounded-xl border border-teal-100 bg-teal-50 px-3 font-mono text-xs font-bold text-teal-900 hover:border-teal-300"
+                        onClick={startFixedContentHotkeyRecording}
+                      >
+                        {recordingFixedContentHotkey ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-700" />
+                            <span>
+                              {fixedContentRecordingPreview
+                                ? formatHotkeyLabel(fixedContentRecordingPreview)
+                                : '请按组合键...'}
+                            </span>
+                          </span>
+                        ) : fixedContentHotkey ? (
+                          formatHotkeyLabel(fixedContentHotkey)
+                        ) : (
+                          '录制固定内容快捷键'
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  <label
+                    htmlFor="fixed-content-body"
+                    className="space-y-1 text-xs font-semibold text-muted-foreground"
+                  >
+                    <span>内容</span>
+                    <textarea
+                      id="fixed-content-body"
+                      className="min-h-24 w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-teal-300 focus:ring-2 focus:ring-teal-100"
+                      value={fixedContentValue}
+                      onChange={(event) => setFixedContentValue(event.target.value)}
+                      placeholder="输入要复制的固定内容"
+                    />
+                  </label>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <label className="inline-flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                      <Switch
+                        checked={fixedContentEnabled}
+                        onCheckedChange={setFixedContentEnabled}
+                      />
+                      <span>启用固定内容</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={resetFixedContentForm}
+                      >
+                        取消
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={
+                          savingFixedContent ||
+                          !fixedContentTitle.trim() ||
+                          !fixedContentValue.trim() ||
+                          !fixedContentHotkey.trim()
+                        }
+                        onClick={() => {
+                          void saveFixedContent();
+                        }}
+                      >
+                        {savingFixedContent ? '保存中...' : '保存固定内容'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
 
             {hotkeyConflicts.length > 0 ? (
               <div className="rounded-[1.15rem] border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
