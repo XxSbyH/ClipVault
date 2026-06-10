@@ -5,6 +5,8 @@ import type {
   BlacklistApp,
   ClipboardApi,
   ClipboardItem,
+  FixedContent,
+  FixedContentInput,
   HotkeySettings,
   HudPayload,
   MonitoringStatus
@@ -163,6 +165,18 @@ export const clipboardApi: ClipboardApi = {
   },
   async removeBlacklist(id) {
     await invoke<BlacklistApp[]>('remove_blacklist', { id });
+  },
+  listFixedContents() {
+    return invoke<FixedContent[]>('list_fixed_contents');
+  },
+  createFixedContent(input: FixedContentInput) {
+    return invoke<FixedContent>('create_fixed_content', { input });
+  },
+  updateFixedContent(id, input) {
+    return invoke<FixedContent>('update_fixed_content', { id, input });
+  },
+  async deleteFixedContent(id) {
+    await invoke<void>('delete_fixed_content', { id });
   },
   async clearHistory(): Promise<ClearHistoryResult> {
     try {

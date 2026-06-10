@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BlacklistApp, ClipboardItem } from '@shared/types';
+import type { BlacklistApp, ClipboardItem, FixedContent, FixedContentInput } from '@shared/types';
 
 const { invokeMock, listenMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -128,6 +128,43 @@ describe('clipboardApi Tauri adapter', () => {
     await expect(clipboardApi.addBlacklist('chrome.exe')).resolves.toEqual(apps[0]);
   });
 
+  it('maps fixed content commands', async () => {
+    const { clipboardApi } = await import('./tauriApi');
+    const fixedContent = {
+      id: 1,
+      title: 'Greeting',
+      content: 'Hello from ClipVault',
+      hotkey: 'Ctrl+Alt+1',
+      enabled: true,
+      createdAt: 1_700_000_000,
+      updatedAt: 1_700_000_100,
+      lastUsedAt: 1_700_000_200,
+      useCount: 3
+    };
+    const input = {
+      title: fixedContent.title,
+      content: fixedContent.content,
+      hotkey: fixedContent.hotkey,
+      enabled: fixedContent.enabled
+    };
+
+    invokeMock.mockResolvedValueOnce([fixedContent]);
+    await expect(clipboardApi.listFixedContents()).resolves.toEqual([fixedContent]);
+    expect(invokeMock).toHaveBeenLastCalledWith('list_fixed_contents');
+
+    invokeMock.mockResolvedValueOnce(fixedContent);
+    await expect(clipboardApi.createFixedContent(input)).resolves.toEqual(fixedContent);
+    expect(invokeMock).toHaveBeenLastCalledWith('create_fixed_content', { input });
+
+    invokeMock.mockResolvedValueOnce(fixedContent);
+    await expect(clipboardApi.updateFixedContent(1, input)).resolves.toEqual(fixedContent);
+    expect(invokeMock).toHaveBeenLastCalledWith('update_fixed_content', { id: 1, input });
+
+    invokeMock.mockResolvedValueOnce(undefined);
+    await expect(clipboardApi.deleteFixedContent(1)).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith('delete_fixed_content', { id: 1 });
+  });
+
   it('does not call listener handlers after unsubscribe even if Tauri resolves later', async () => {
     const item = makeItem(5);
     const unlisten = vi.fn();
@@ -180,3 +217,17 @@ function makeBlacklistApp(id: number, appName: string, isBuiltin: boolean): Blac
     createdAt: 1_700_000_000 + id
   };
 }
+
+type Expect<T extends true> = T;
+type IsExactlyString<T> = [T] extends [string] ? ([string] extends [T] ? true : false) : false;
+type IsRequired<T, K extends keyof T> = {} extends Pick<T, K> ? false : true;
+
+const fixedContentHotkeyTypeCheck: Expect<IsExactlyString<FixedContent['hotkey']>> = true;
+const fixedContentInputHotkeyTypeCheck: Expect<IsExactlyString<FixedContentInput['hotkey']>> = true;
+const fixedContentInputHotkeyRequiredTypeCheck: Expect<
+  IsRequired<FixedContentInput, 'hotkey'>
+> = true;
+
+void fixedContentHotkeyTypeCheck;
+void fixedContentInputHotkeyTypeCheck;
+void fixedContentInputHotkeyRequiredTypeCheck;

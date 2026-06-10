@@ -4,6 +4,7 @@ import type { ClipboardItem as ClipboardItemType } from '@shared/types';
 import { ClipboardItem } from '@/components/ClipboardItem';
 import { EmptyState } from '@/components/EmptyState';
 import { clipboardApi } from '@/lib/tauriApi';
+import { getHistoryFetchLimit } from '@/lib/historyLimit';
 import { itemMatchesSearchQuery } from '@/lib/search';
 import { useClipboardStore } from '@/store/clipboardStore';
 
@@ -80,6 +81,7 @@ export function ClipboardList(): JSX.Element {
   const setSelectedItemId = useClipboardStore((state) => state.setSelectedItemId);
   const setItems = useClipboardStore((state) => state.setItems);
   const upsertItem = useClipboardStore((state) => state.upsertItem);
+  const settings = useClipboardStore((state) => state.settings);
   const removeItem = useClipboardStore((state) => state.removeItem);
   const [height, setHeight] = useState(360);
   const listRef = useRef<List<RowData>>(null);
@@ -115,8 +117,8 @@ export function ClipboardList(): JSX.Element {
   }, []);
 
   const refreshHistory = useCallback(() => {
-    void clipboardApi.getHistory(300).then(setItems);
-  }, [setItems]);
+    void clipboardApi.getHistory(getHistoryFetchLimit(settings)).then(setItems);
+  }, [setItems, settings]);
 
   const onCopy = useCallback(
     (id: number) => {

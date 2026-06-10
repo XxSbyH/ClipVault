@@ -13,10 +13,13 @@ use crate::{
     errors::AppResult,
     models::{
         AppSettings, BlacklistApp, ClipboardContentType, ClipboardInsertInput, ClipboardItem,
-        HotkeySettings, HotkeySettingsPatch, ImageCompression, ThemeMode, WheelShortcutModifier,
-        WheelShortcutScope,
+        FixedContent, FixedContentInput, HotkeySettings, HotkeySettingsPatch, ImageCompression,
+        ThemeMode, WheelShortcutModifier, WheelShortcutScope,
     },
 };
+
+const CLIPBOARD_ITEM_SUMMARY_COLUMNS: &str = "id, content, content_type, content_hash, preview, metadata, file_path, NULL AS image_data, created_at, last_used_at, use_count, is_pinned, is_favorite";
+const CLIPBOARD_ITEM_SUMMARY_COLUMNS_QUALIFIED: &str = "clipboard_items.id, clipboard_items.content, clipboard_items.content_type, clipboard_items.content_hash, clipboard_items.preview, clipboard_items.metadata, clipboard_items.file_path, NULL AS image_data, clipboard_items.created_at, clipboard_items.last_used_at, clipboard_items.use_count, clipboard_items.is_pinned, clipboard_items.is_favorite";
 
 pub struct Repository {
     conn: Arc<Mutex<Connection>>,
@@ -39,7 +42,11 @@ impl Repository {
     pub fn insert_clipboard_item(&self, input: ClipboardInsertInput) -> AppResult<ClipboardItem> {
         let conn = self.conn()?;
         if let Some(existing) = self.get_item_by_hash_locked(&conn, &input.content_hash)? {
-            return Ok(existing);
+            conn.execute(
+                "UPDATE clipboard_items SET created_at = ?1 WHERE id = ?2",
+                params![now_timestamp(), existing.id],
+            )?;
+            return self.get_item_locked(&conn, existing.id);
         }
 
         let metadata = serde_json::to_string(&input.metadata.unwrap_or_default())?;
@@ -77,24 +84,22 @@ impl Repository {
 
     pub fn get_history(&self, limit: i64) -> AppResult<Vec<ClipboardItem>> {
         let conn = self.conn()?;
-        query_items(
-            &conn,
-            "SELECT * FROM clipboard_items
+        let sql = format!(
+            "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
              ORDER BY is_pinned DESC, created_at DESC, id DESC
-             LIMIT ?1",
-            params![limit],
-        )
+             LIMIT ?1"
+        );
+        query_items(&conn, &sql, params![limit])
     }
 
     pub fn get_history_page(&self, limit: i64, offset: i64) -> AppResult<Vec<ClipboardItem>> {
         let conn = self.conn()?;
-        query_items(
-            &conn,
-            "SELECT * FROM clipboard_items
+        let sql = format!(
+            "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
              ORDER BY is_pinned DESC, created_at DESC, id DESC
-             LIMIT ?1 OFFSET ?2",
-            params![limit, offset],
-        )
+             LIMIT ?1 OFFSET ?2"
+        );
+        query_items(&conn, &sql, params![limit, offset])
     }
 
     pub fn get_history_by_offset(&self, offset: i64) -> AppResult<Option<ClipboardItem>> {
@@ -198,24 +203,22 @@ impl Repository {
         let fts_query = query.replace('"', "\"\"");
         let like = format!("%{query}%");
         let like_search = || {
-            query_items(
-                &conn,
-                "SELECT * FROM clipboard_items
+            let sql = format!(
+                "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
                  WHERE content LIKE ?1 OR preview LIKE ?1
                  ORDER BY is_pinned DESC, created_at DESC, id DESC
-                 LIMIT ?2",
-                params![like, limit],
-            )
+                 LIMIT ?2"
+            );
+            query_items(&conn, &sql, params![like, limit])
         };
-        let fts = query_items(
-            &conn,
-            "SELECT clipboard_items.* FROM clipboard_items
+        let sql = format!(
+            "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS_QUALIFIED} FROM clipboard_items
              JOIN clipboard_fts ON clipboard_fts.rowid = clipboard_items.id
              WHERE clipboard_fts MATCH ?1
              ORDER BY is_pinned DESC, created_at DESC, id DESC
-             LIMIT ?2",
-            params![fts_query, limit],
+             LIMIT ?2"
         );
+        let fts = query_items(&conn, &sql, params![fts_query, limit]);
 
         match fts {
             Ok(items) if !items.is_empty() => Ok(items),
@@ -344,6 +347,99 @@ impl Repository {
         self.get_hotkey_settings()
     }
 
+    pub fn list_fixed_contents(&self) -> AppResult<Vec<FixedContent>> {
+        let conn = self.conn()?;
+        query_fixed_contents(
+            &conn,
+            "SELECT id, title, content, hotkey, enabled, created_at, updated_at, last_used_at, use_count
+             FROM fixed_contents
+             ORDER BY updated_at DESC, id DESC",
+            [],
+        )
+    }
+
+    pub fn get_fixed_content_by_id(&self, id: i64) -> AppResult<Option<FixedContent>> {
+        let conn = self.conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT id, title, content, hotkey, enabled, created_at, updated_at, last_used_at, use_count
+                 FROM fixed_contents
+                 WHERE id = ?1",
+                params![id],
+                map_fixed_content,
+            )
+            .optional()?)
+    }
+
+    pub fn create_fixed_content(&self, input: &FixedContentInput) -> AppResult<FixedContent> {
+        let conn = self.conn()?;
+        let now = now_timestamp();
+        conn.execute(
+            "INSERT INTO fixed_contents
+             (title, content, hotkey, enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                input.title.as_str(),
+                input.content.as_str(),
+                input.hotkey.as_str(),
+                bool_to_db(input.enabled),
+                now,
+                now,
+            ],
+        )?;
+
+        let id = conn.last_insert_rowid();
+        self.get_fixed_content_locked(&conn, id)
+    }
+
+    pub fn update_fixed_content(
+        &self,
+        id: i64,
+        input: &FixedContentInput,
+    ) -> AppResult<Option<FixedContent>> {
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE fixed_contents
+             SET title = ?1, content = ?2, hotkey = ?3, enabled = ?4, updated_at = ?5
+             WHERE id = ?6",
+            params![
+                input.title.as_str(),
+                input.content.as_str(),
+                input.hotkey.as_str(),
+                bool_to_db(input.enabled),
+                now_timestamp(),
+                id,
+            ],
+        )?;
+
+        if updated == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(self.get_fixed_content_locked(&conn, id)?))
+    }
+
+    pub fn delete_fixed_content(&self, id: i64) -> AppResult<bool> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM fixed_contents WHERE id = ?1", params![id])? > 0)
+    }
+
+    pub fn increment_fixed_content_use_stats(&self, id: i64) -> AppResult<Option<FixedContent>> {
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE fixed_contents
+             SET use_count = use_count + 1, last_used_at = ?1, updated_at = ?1
+             WHERE id = ?2",
+            params![now_timestamp(), id],
+        )?;
+
+        if updated == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(self.get_fixed_content_locked(&conn, id)?))
+    }
+
     pub fn list_blacklist(&self) -> AppResult<Vec<BlacklistApp>> {
         self.list_blacklist_apps()
     }
@@ -425,6 +521,16 @@ impl Repository {
         )?)
     }
 
+    fn get_fixed_content_locked(&self, conn: &Connection, id: i64) -> AppResult<FixedContent> {
+        Ok(conn.query_row(
+            "SELECT id, title, content, hotkey, enabled, created_at, updated_at, last_used_at, use_count
+             FROM fixed_contents
+             WHERE id = ?1",
+            params![id],
+            map_fixed_content,
+        )?)
+    }
+
     fn get_json_setting_locked<T>(&self, conn: &Connection, key: &str) -> AppResult<Option<T>>
     where
         T: DeserializeOwned,
@@ -460,6 +566,15 @@ where
 {
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(params, map_clipboard_item)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+fn query_fixed_contents<P>(conn: &Connection, sql: &str, params: P) -> AppResult<Vec<FixedContent>>
+where
+    P: rusqlite::Params,
+{
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params, map_fixed_content)?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
@@ -631,6 +746,20 @@ fn map_clipboard_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem
     })
 }
 
+fn map_fixed_content(row: &rusqlite::Row<'_>) -> rusqlite::Result<FixedContent> {
+    Ok(FixedContent {
+        id: row.get("id")?,
+        title: row.get("title")?,
+        content: row.get("content")?,
+        hotkey: row.get("hotkey")?,
+        enabled: row.get::<_, i64>("enabled")? != 0,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        last_used_at: row.get("last_used_at")?,
+        use_count: row.get::<_, Option<i64>>("use_count")?.unwrap_or_default(),
+    })
+}
+
 fn map_blacklist_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<BlacklistApp> {
     Ok(BlacklistApp {
         id: row.get("id")?,
@@ -641,6 +770,14 @@ fn map_blacklist_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<BlacklistApp> 
         is_builtin: row.get::<_, Option<i64>>("is_builtin")?.unwrap_or_default() == 1,
         created_at: row.get::<_, Option<i64>>("created_at")?.unwrap_or_default(),
     })
+}
+
+fn bool_to_db(value: bool) -> i64 {
+    if value {
+        1
+    } else {
+        0
+    }
 }
 
 fn content_type_to_db(content_type: ClipboardContentType) -> &'static str {
@@ -681,8 +818,8 @@ mod tests {
     use serde_json::json;
 
     use crate::models::{
-        AppSettings, ClipboardContentType, ClipboardInsertInput, HotkeySettingsPatch,
-        ImageCompression, ThemeMode,
+        AppSettings, ClipboardContentType, ClipboardInsertInput, FixedContentInput,
+        HotkeySettingsPatch, ImageCompression, ThemeMode,
     };
 
     use super::Repository;
@@ -705,6 +842,27 @@ mod tests {
         }
     }
 
+    fn image_input(content: &str, hash: &str, image_data: Vec<u8>) -> ClipboardInsertInput {
+        ClipboardInsertInput {
+            content: Some(content.to_string()),
+            content_type: ClipboardContentType::Image,
+            content_hash: hash.to_string(),
+            preview: content.to_string(),
+            metadata: None,
+            file_path: None,
+            image_data: Some(image_data),
+        }
+    }
+
+    fn fixed_input(title: &str, content: &str, hotkey: &str, enabled: bool) -> FixedContentInput {
+        FixedContentInput {
+            title: title.to_string(),
+            content: content.to_string(),
+            hotkey: hotkey.to_string(),
+            enabled,
+        }
+    }
+
     #[test]
     fn insert_clipboard_item_and_return_existing_duplicate() {
         let repo = repo();
@@ -712,12 +870,23 @@ mod tests {
         let first = repo
             .insert_clipboard_item(text_input("hello", "hash-1"))
             .unwrap();
+        repo.conn()
+            .unwrap()
+            .execute(
+                "UPDATE clipboard_items SET created_at = 100 WHERE id = ?1",
+                rusqlite::params![first.id],
+            )
+            .unwrap();
         let duplicate = repo
             .insert_clipboard_item(text_input("changed", "hash-1"))
             .unwrap();
 
         assert_eq!(first.id, duplicate.id);
         assert_eq!(duplicate.content.as_deref(), Some("hello"));
+        assert!(
+            duplicate.created_at > 100,
+            "duplicate captures should refresh the existing item timestamp"
+        );
         assert_eq!(repo.get_item_by_id(first.id).unwrap().unwrap().id, first.id);
         assert_eq!(repo.count_items().unwrap(), 1);
     }
@@ -750,6 +919,24 @@ mod tests {
 
         assert_eq!(history[0].id, older.id);
         assert_eq!(history[1].id, newer.id);
+    }
+
+    #[test]
+    fn get_history_returns_image_summaries_without_image_data() {
+        let repo = repo();
+        let item = repo
+            .insert_clipboard_item(image_input("clip.png", "hash-image-summary", vec![1, 2, 3]))
+            .unwrap();
+
+        let history = repo.get_history(10).unwrap();
+        let summary = history
+            .iter()
+            .find(|current| current.id == item.id)
+            .unwrap();
+        let detail = repo.get_item_by_id(item.id).unwrap().unwrap();
+
+        assert_eq!(summary.image_data, None);
+        assert_eq!(detail.image_data, Some(vec![1, 2, 3]));
     }
 
     #[test]
@@ -801,6 +988,71 @@ mod tests {
 
         assert_eq!(used.use_count, 1);
         assert!(used.last_used_at.is_some());
+    }
+
+    #[test]
+    fn fixed_contents_round_trip_and_track_usage() {
+        let repo = repo();
+
+        let created = repo
+            .create_fixed_content(&fixed_input("Topic A", "A", "Ctrl+1", true))
+            .unwrap();
+        assert_eq!(created.title, "Topic A");
+        assert_eq!(created.content, "A");
+        assert_eq!(created.hotkey, "Ctrl+1");
+        assert!(created.enabled);
+        assert_eq!(created.use_count, 0);
+
+        let listed = repo.list_fixed_contents().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.id);
+
+        let fetched = repo.get_fixed_content_by_id(created.id).unwrap().unwrap();
+        assert_eq!(fetched.id, created.id);
+
+        let updated = repo
+            .update_fixed_content(created.id, &fixed_input("Topic B", "B", "Ctrl+2", false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.title, "Topic B");
+        assert_eq!(updated.content, "B");
+        assert_eq!(updated.hotkey, "Ctrl+2");
+        assert!(!updated.enabled);
+
+        let used = repo
+            .increment_fixed_content_use_stats(created.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(used.use_count, 1);
+        assert!(used.last_used_at.is_some());
+
+        assert!(repo.delete_fixed_content(created.id).unwrap());
+        assert!(repo.list_fixed_contents().unwrap().is_empty());
+    }
+
+    #[test]
+    fn fixed_content_enabled_hotkeys_are_unique() {
+        let repo = repo();
+        repo.create_fixed_content(&fixed_input("A", "A", "Ctrl+1", true))
+            .unwrap();
+
+        let duplicate = repo
+            .create_fixed_content(&fixed_input("B", "B", "Ctrl+1", true))
+            .is_err();
+        assert!(duplicate);
+
+        let disabled_duplicate = repo
+            .create_fixed_content(&fixed_input("C", "C", "Ctrl+1", false))
+            .unwrap();
+        assert!(!disabled_duplicate.enabled);
+
+        let enabled_duplicate = repo
+            .update_fixed_content(
+                disabled_duplicate.id,
+                &fixed_input("C", "C", "Ctrl+1", true),
+            )
+            .is_err();
+        assert!(enabled_duplicate);
     }
 
     #[test]
