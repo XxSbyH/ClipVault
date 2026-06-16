@@ -134,7 +134,8 @@ export function ClipboardDetail(): JSX.Element {
 
   const size = formatFileSize(item.metadata.fileSize ?? item.metadata.compressedSize);
   const time = formatDistanceToNow(new Date(item.createdAt), { addSuffix: true });
-  const preview = item.contentType === 'file' ? item.filePath ?? item.preview : item.preview;
+  const detailContent =
+    item.contentType === 'file' ? item.filePath ?? item.content ?? item.preview : item.content ?? item.preview;
   const detailHint = getDetailHint(item);
   const imageTitle =
     typeof item.metadata.fileName === 'string' && item.metadata.fileName.trim()
@@ -189,8 +190,8 @@ export function ClipboardDetail(): JSX.Element {
 
           <div className="mt-3 rounded-2xl bg-slate-50 p-3">
             <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">内容</p>
-            <p className="max-h-28 overflow-auto break-words text-sm font-medium leading-6 text-slate-900">
-              {preview || '空内容'}
+            <p className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-sm font-medium leading-6 text-slate-900">
+              {detailContent || '空内容'}
             </p>
           </div>
 

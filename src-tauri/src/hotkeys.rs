@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -15,6 +18,7 @@ use crate::{
 };
 
 const WHEEL_DEBOUNCE_MS: u128 = 180;
+const QUICK_PASTE_CURSOR_IDLE_RESET: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickPasteDirection {
@@ -24,41 +28,79 @@ pub enum QuickPasteDirection {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QuickPasteCursor {
-    offset: Option<i64>,
+    offset: Option<usize>,
     head_id: Option<i64>,
+    order: Vec<i64>,
+    last_used_at: Option<Instant>,
 }
 
 impl QuickPasteCursor {
-    pub fn resolve(
+    pub fn resolve(&mut self, direction: QuickPasteDirection, history_ids: &[i64]) -> Option<i64> {
+        self.resolve_at(direction, history_ids, Instant::now())
+    }
+
+    fn resolve_at(
         &mut self,
         direction: QuickPasteDirection,
-        total: i64,
-        head_id: Option<i64>,
+        history_ids: &[i64],
+        now: Instant,
     ) -> Option<i64> {
-        if total <= 0 {
-            self.offset = None;
-            self.head_id = head_id;
+        if history_ids.is_empty() {
+            *self = Self::default();
             return None;
         }
 
-        if self.head_id != head_id {
-            self.offset = None;
-            self.head_id = head_id;
+        self.retain_existing_ids(history_ids);
+        if self.should_start_new_session(now) {
+            self.start_session(history_ids);
         }
 
-        let current = self.offset.unwrap_or(0);
+        let current = self.offset.unwrap_or(0).min(self.order.len() - 1);
         let next = match direction {
-            QuickPasteDirection::Older => (current + 1).min(total - 1),
-            QuickPasteDirection::Newer => (current - 1).max(0),
+            QuickPasteDirection::Older => (current + 1).min(self.order.len() - 1),
+            QuickPasteDirection::Newer => current.saturating_sub(1),
         };
 
         self.offset = Some(next);
-        Some(next)
+        self.last_used_at = Some(now);
+        self.order.get(next).copied()
+    }
+
+    fn should_start_new_session(&self, now: Instant) -> bool {
+        self.order.is_empty()
+            || self.offset.is_none()
+            || self
+                .last_used_at
+                .and_then(|last| now.checked_duration_since(last))
+                .is_some_and(|elapsed| elapsed >= QUICK_PASTE_CURSOR_IDLE_RESET)
+    }
+
+    fn start_session(&mut self, history_ids: &[i64]) {
+        self.order = history_ids.to_vec();
+        self.offset = Some(0);
+        self.head_id = history_ids.first().copied();
+    }
+
+    fn retain_existing_ids(&mut self, history_ids: &[i64]) {
+        if self.order.is_empty() {
+            return;
+        }
+
+        self.order.retain(|id| history_ids.contains(id));
+        if self.order.is_empty() {
+            self.offset = None;
+            self.head_id = None;
+            return;
+        }
+
+        if self.offset.is_some_and(|offset| offset >= self.order.len()) {
+            self.offset = Some(self.order.len() - 1);
+        }
     }
 
     pub fn snapshot(&self) -> QuickPasteCursorSnapshot {
         QuickPasteCursorSnapshot {
-            offset: self.offset,
+            offset: self.offset.map(|offset| offset as i64),
             head_id: self.head_id,
         }
     }
@@ -370,14 +412,15 @@ fn resolve_quick_history_item(
     direction: QuickPasteDirection,
 ) -> AppResult<Option<ClipboardItem>> {
     let total = state.repository().count_items()?;
-    let history = state.repository().get_history(1)?;
-    let Some(offset) =
-        state.quick_paste_cursor_mut(|cursor| cursor.resolve(direction, total, head_id(&history)))
+    let history = state.repository().get_history(total)?;
+    let history_ids = history.iter().map(|item| item.id).collect::<Vec<_>>();
+    let Some(item_id) =
+        state.quick_paste_cursor_mut(|cursor| cursor.resolve(direction, &history_ids))
     else {
         return Ok(None);
     };
 
-    state.repository().get_history_by_offset(offset)
+    Ok(history.into_iter().find(|item| item.id == item_id))
 }
 
 fn copy_quick_history_item<F>(
@@ -878,12 +921,54 @@ mod tests {
     }
 
     #[test]
+    fn quick_history_action_keeps_sequence_when_copied_item_moves_to_head() {
+        let state = AppState::new(repo());
+        let oldest = state
+            .repository()
+            .insert_clipboard_item(text_input("oldest", "hash-sequence-oldest"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let middle = state
+            .repository()
+            .insert_clipboard_item(text_input("middle", "hash-sequence-middle"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        state
+            .repository()
+            .insert_clipboard_item(text_input("newest", "hash-sequence-newest"))
+            .unwrap();
+        let mut copied_ids = Vec::new();
+
+        copy_quick_history_item(&state, QuickPasteDirection::Older, |item| {
+            copied_ids.push(item.id);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        state
+            .repository()
+            .insert_clipboard_item(text_input("middle", "hash-sequence-middle"))
+            .unwrap();
+
+        copy_quick_history_item(&state, QuickPasteDirection::Older, |item| {
+            copied_ids.push(item.id);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(copied_ids, vec![middle.id, oldest.id]);
+    }
+
+    #[test]
     fn first_older_move_selects_offset_one_when_history_has_at_least_two_items() {
         let mut cursor = QuickPasteCursor::default();
 
         assert_eq!(
-            cursor.resolve(QuickPasteDirection::Older, 3, Some(10)),
-            Some(1)
+            cursor.resolve(QuickPasteDirection::Older, &[10, 9, 8]),
+            Some(9)
         );
         assert_eq!(
             cursor.snapshot(),
@@ -899,12 +984,12 @@ mod tests {
         let mut cursor = QuickPasteCursor::default();
 
         assert_eq!(
-            cursor.resolve(QuickPasteDirection::Newer, 3, Some(10)),
-            Some(0)
+            cursor.resolve(QuickPasteDirection::Newer, &[10, 9, 8]),
+            Some(10)
         );
         assert_eq!(
-            cursor.resolve(QuickPasteDirection::Newer, 3, Some(10)),
-            Some(0)
+            cursor.resolve(QuickPasteDirection::Newer, &[10, 9, 8]),
+            Some(10)
         );
     }
 
@@ -913,32 +998,45 @@ mod tests {
         let mut cursor = QuickPasteCursor::default();
 
         assert_eq!(
-            cursor.resolve(QuickPasteDirection::Older, 2, Some(10)),
-            Some(1)
+            cursor.resolve(QuickPasteDirection::Older, &[10, 9]),
+            Some(9)
         );
         assert_eq!(
-            cursor.resolve(QuickPasteDirection::Older, 2, Some(10)),
-            Some(1)
+            cursor.resolve(QuickPasteDirection::Older, &[10, 9]),
+            Some(9)
         );
     }
 
     #[test]
-    fn head_id_change_resets_cursor_before_resolving() {
+    fn active_session_keeps_order_until_idle_timeout() {
         let mut cursor = QuickPasteCursor::default();
+        let now = Instant::now();
         assert_eq!(
-            cursor.resolve(QuickPasteDirection::Older, 4, Some(10)),
-            Some(1)
+            cursor.resolve_at(QuickPasteDirection::Older, &[10, 9, 8, 7], now),
+            Some(9)
         );
 
         assert_eq!(
-            cursor.resolve(QuickPasteDirection::Older, 4, Some(11)),
-            Some(1)
+            cursor.resolve_at(
+                QuickPasteDirection::Older,
+                &[9, 10, 8, 7],
+                now + Duration::from_secs(1)
+            ),
+            Some(8)
+        );
+        assert_eq!(
+            cursor.resolve_at(
+                QuickPasteDirection::Older,
+                &[9, 10, 8, 7],
+                now + QUICK_PASTE_CURSOR_IDLE_RESET + Duration::from_secs(1)
+            ),
+            Some(10)
         );
         assert_eq!(
             cursor.snapshot(),
             QuickPasteCursorSnapshot {
                 offset: Some(1),
-                head_id: Some(11),
+                head_id: Some(9),
             }
         );
     }
@@ -947,11 +1045,11 @@ mod tests {
     fn empty_history_clears_cursor() {
         let mut cursor = QuickPasteCursor::default();
         assert_eq!(
-            cursor.resolve(QuickPasteDirection::Older, 3, Some(10)),
-            Some(1)
+            cursor.resolve(QuickPasteDirection::Older, &[10, 9, 8]),
+            Some(9)
         );
 
-        assert_eq!(cursor.resolve(QuickPasteDirection::Older, 0, None), None);
+        assert_eq!(cursor.resolve(QuickPasteDirection::Older, &[]), None);
         assert_eq!(cursor.snapshot(), QuickPasteCursorSnapshot::default());
     }
 
