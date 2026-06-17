@@ -180,6 +180,10 @@ git tag -a vX.Y.Z -m "ClipVault vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
+### 其他
+
+感谢 [LINUX DO 社区](https://linux.do/) 对开源项目分享和交流的支持。
+
 ### License
 
 MIT © xxsby
