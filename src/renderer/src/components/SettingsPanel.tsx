@@ -75,6 +75,9 @@ const WHEEL_MODIFIER_OPTIONS: Array<{ value: AppSettings['wheelShortcutModifier'
   { value: 'ctrl+alt', label: 'Ctrl+Alt' }
 ];
 
+const MIN_MAX_ITEMS = 100;
+const MAX_MAX_ITEMS = 1_000_000;
+
 const WHEEL_SCOPE_OPTIONS: Array<{ value: AppSettings['wheelShortcutScope']; label: string }> = [
   { value: 'global', label: '全局生效' },
   { value: 'panel-only', label: '仅面板打开时' }
@@ -296,6 +299,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
   const [errorMessage, setErrorMessage] = useState('');
   const [clearState, setClearState] = useState<'idle' | 'clearing' | 'success' | 'error'>('idle');
   const [clearMessage, setClearMessage] = useState('');
+  const [maxItemsDraft, setMaxItemsDraft] = useState('10000');
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const candidateComboRef = useRef('');
   const fixedContentPressedKeysRef = useRef<Set<string>>(new Set());
@@ -412,7 +416,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
     () =>
       settings ?? {
         retentionDays: 7,
-        maxItems: 1000,
+        maxItems: 10000,
         enableSensitiveFilter: true,
         enableBlacklist: true,
         textLimitKb: 100,
@@ -425,6 +429,12 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       },
     [settings]
   );
+
+  useEffect(() => {
+    if (open) {
+      setMaxItemsDraft(String(safeSettings.maxItems));
+    }
+  }, [open, safeSettings.maxItems]);
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const seq = (settingsUpdateSeqRef.current[key] ?? 0) + 1;
@@ -443,6 +453,26 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
           setErrorMessage('设置保存失败，请稍后重试。');
         }
       });
+  };
+
+  const commitMaxItemsDraft = () => {
+    const trimmed = maxItemsDraft.trim();
+    const next = Number(trimmed);
+    if (
+      !trimmed ||
+      !Number.isInteger(next) ||
+      next < MIN_MAX_ITEMS ||
+      next > MAX_MAX_ITEMS
+    ) {
+      setMaxItemsDraft(String(safeSettings.maxItems));
+      return;
+    }
+
+    if (next !== safeSettings.maxItems) {
+      update('maxItems', next);
+    } else {
+      setMaxItemsDraft(String(safeSettings.maxItems));
+    }
   };
 
   const handleClearHistory = async () => {
@@ -979,10 +1009,20 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
               <span className="text-sm font-semibold">最大条目数</span>
               <Input
                 type="number"
-                min={100}
-                max={10000}
-                value={safeSettings.maxItems}
-                onChange={(event) => update('maxItems', Number(event.target.value))}
+                min={MIN_MAX_ITEMS}
+                max={MAX_MAX_ITEMS}
+                value={maxItemsDraft}
+                onChange={(event) => setMaxItemsDraft(event.target.value)}
+                onBlur={commitMaxItemsDraft}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.currentTarget.blur();
+                  }
+                  if (event.key === 'Escape') {
+                    setMaxItemsDraft(String(safeSettings.maxItems));
+                    event.currentTarget.blur();
+                  }
+                }}
               />
             </div>
             <div className="grid min-h-[58px] grid-cols-[1fr_180px] items-center gap-4 rounded-[1.15rem] border border-slate-200 bg-white px-4 py-3">

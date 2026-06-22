@@ -20,6 +20,8 @@ use crate::{
 
 const CLIPBOARD_ITEM_SUMMARY_COLUMNS: &str = "id, content, content_type, content_hash, preview, metadata, file_path, NULL AS image_data, created_at, last_used_at, use_count, is_pinned, is_favorite";
 const CLIPBOARD_ITEM_SUMMARY_COLUMNS_QUALIFIED: &str = "clipboard_items.id, clipboard_items.content, clipboard_items.content_type, clipboard_items.content_hash, clipboard_items.preview, clipboard_items.metadata, clipboard_items.file_path, NULL AS image_data, clipboard_items.created_at, clipboard_items.last_used_at, clipboard_items.use_count, clipboard_items.is_pinned, clipboard_items.is_favorite";
+const MIN_MAX_ITEMS: u32 = 100;
+const MAX_MAX_ITEMS: u32 = 1_000_000;
 
 pub struct Repository {
     conn: Arc<Mutex<Connection>>,
@@ -241,6 +243,7 @@ impl Repository {
             let (key, value) = row?;
             apply_setting_row(&mut settings, &key, &value);
         }
+        normalize_app_settings(&mut settings);
 
         Ok(settings)
     }
@@ -581,7 +584,7 @@ where
 fn serialize_setting_value(key: &str, value: Value) -> AppResult<String> {
     match key {
         "retentionDays" => serialize_typed_setting::<u32>(key, value),
-        "maxItems" => serialize_typed_setting::<u32>(key, value),
+        "maxItems" => serialize_bounded_u32_setting(key, value, MIN_MAX_ITEMS, MAX_MAX_ITEMS),
         "enableSensitiveFilter" => serialize_typed_setting::<bool>(key, value),
         "enableBlacklist" => serialize_typed_setting::<bool>(key, value),
         "textLimitKb" => serialize_typed_setting::<u32>(key, value),
@@ -593,6 +596,15 @@ fn serialize_setting_value(key: &str, value: Value) -> AppResult<String> {
         "wheelShortcutScope" => serialize_typed_setting::<WheelShortcutScope>(key, value),
         _ => Err(format!("unknown setting key: {key}").into()),
     }
+}
+
+fn serialize_bounded_u32_setting(key: &str, value: Value, min: u32, max: u32) -> AppResult<String> {
+    let typed = serde_json::from_value::<u32>(value)
+        .map_err(|_| format!("invalid value for setting {key}"))?;
+    if !(min..=max).contains(&typed) {
+        return Err(format!("invalid value for setting {key}: expected {min}..={max}").into());
+    }
+    Ok(serde_json::to_string(&typed)?)
 }
 
 fn serialize_typed_setting<T>(key: &str, value: Value) -> AppResult<String>
@@ -624,6 +636,12 @@ fn apply_setting_row(settings: &mut AppSettings, key: &str, value: &str) {
             apply_json::<WheelShortcutScope>(value, &mut settings.wheel_shortcut_scope)
         }
         _ => {}
+    }
+}
+
+fn normalize_app_settings(settings: &mut AppSettings) {
+    if !(MIN_MAX_ITEMS..=MAX_MAX_ITEMS).contains(&settings.max_items) {
+        settings.max_items = AppSettings::default().max_items;
     }
 }
 
@@ -1182,6 +1200,13 @@ mod tests {
         assert!(error.to_string().contains("retentionDays"));
         assert_eq!(repo.get_settings().unwrap().retention_days, 7);
 
+        let max_items_error = repo.update_setting("maxItems", json!(0)).unwrap_err();
+        assert!(max_items_error.to_string().contains("maxItems"));
+        assert_eq!(repo.get_settings().unwrap().max_items, 10_000);
+
+        let max_items = repo.update_setting("maxItems", json!(1_000_000)).unwrap();
+        assert_eq!(max_items.max_items, 1_000_000);
+
         let image_error = repo
             .update_setting("imageCompression", json!("lossless"))
             .unwrap_err();
@@ -1201,12 +1226,12 @@ mod tests {
             .conn()
             .unwrap()
             .query_row(
-                "SELECT COUNT(*) FROM settings WHERE key IN ('retentionDays', 'imageCompression', 'themeMode')",
+                "SELECT COUNT(*) FROM settings WHERE key IN ('retentionDays', 'maxItems', 'imageCompression', 'themeMode')",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored_count, 0);
+        assert_eq!(stored_count, 1);
     }
 
     #[test]

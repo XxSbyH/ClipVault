@@ -152,7 +152,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             retention_days: 7,
-            max_items: 1000,
+            max_items: 10_000,
             enable_sensitive_filter: true,
             enable_blacklist: true,
             text_limit_kb: 100,
@@ -357,7 +357,7 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(settings.retention_days, 7);
-        assert_eq!(settings.max_items, 1000);
+        assert_eq!(settings.max_items, 10_000);
         assert!(settings.enable_sensitive_filter);
         assert!(settings.enable_blacklist);
         assert_eq!(settings.text_limit_kb, 100);

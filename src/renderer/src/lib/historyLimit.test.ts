@@ -3,6 +3,10 @@ import { DEFAULT_SETTINGS } from '@shared/types';
 import { getHistoryFetchLimit } from './historyLimit';
 
 describe('history fetch limit', () => {
+  it('keeps the default maximum item count at 10000', () => {
+    expect(DEFAULT_SETTINGS.maxItems).toBe(10_000);
+  });
+
   it('uses the configured maximum item count instead of a fixed 300 limit', () => {
     expect(getHistoryFetchLimit({ ...DEFAULT_SETTINGS, maxItems: 1000 })).toBe(1000);
   });

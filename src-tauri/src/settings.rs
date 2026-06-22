@@ -9,8 +9,14 @@ pub fn update_setting_with_side_effects(
 ) -> AppResult<AppSettings> {
     let settings = repo.update_setting(key, value)?;
 
-    if matches!(key, "retentionDays" | "maxItems") {
-        cleanup::run_cleanup_now(repo, &settings)?;
+    match key {
+        "retentionDays" => {
+            cleanup::run_cleanup_now(repo, &settings)?;
+        }
+        "maxItems" => {
+            repo.enforce_max_items(i64::from(settings.max_items))?;
+        }
+        _ => {}
     }
 
     Ok(settings)
@@ -71,5 +77,59 @@ mod tests {
 
         assert_eq!(settings.retention_days, 7);
         assert_eq!(repo.count_items().unwrap(), 1);
+    }
+
+    #[test]
+    fn settings_update_max_items_does_not_delete_expired_items_within_limit() {
+        let (_dir, path, repo) = repo();
+        let expired = repo
+            .insert_clipboard_item(text_input("expired", "hash-expired"))
+            .unwrap();
+        repo.insert_clipboard_item(text_input("fresh", "hash-fresh"))
+            .unwrap();
+        {
+            let conn = Connection::open(path).unwrap();
+            conn.execute(
+                "UPDATE clipboard_items SET created_at = 1 WHERE id = ?1",
+                rusqlite::params![expired.id],
+            )
+            .unwrap();
+        }
+
+        let settings =
+            super::update_setting_with_side_effects(&repo, "maxItems", json!(10_000)).unwrap();
+
+        assert_eq!(settings.max_items, 10_000);
+        assert_eq!(repo.count_items().unwrap(), 2);
+    }
+
+    #[test]
+    fn settings_update_max_items_rejects_zero_without_deleting_history() {
+        let (_dir, _path, repo) = repo();
+        repo.insert_clipboard_item(text_input("one", "hash-one"))
+            .unwrap();
+        repo.insert_clipboard_item(text_input("two", "hash-two"))
+            .unwrap();
+
+        let result = super::update_setting_with_side_effects(&repo, "maxItems", json!(0));
+
+        assert!(result.unwrap_err().to_string().contains("maxItems"));
+        assert_eq!(repo.count_items().unwrap(), 2);
+        assert_eq!(repo.get_settings().unwrap().max_items, 10_000);
+    }
+
+    #[test]
+    fn settings_update_max_items_allows_one_million_without_deleting_history() {
+        let (_dir, _path, repo) = repo();
+        repo.insert_clipboard_item(text_input("one", "hash-one"))
+            .unwrap();
+        repo.insert_clipboard_item(text_input("two", "hash-two"))
+            .unwrap();
+
+        let settings =
+            super::update_setting_with_side_effects(&repo, "maxItems", json!(1_000_000)).unwrap();
+
+        assert_eq!(settings.max_items, 1_000_000);
+        assert_eq!(repo.count_items().unwrap(), 2);
     }
 }

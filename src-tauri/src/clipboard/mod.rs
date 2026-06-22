@@ -57,7 +57,6 @@ impl ClipboardMonitor {
 pub fn start_monitoring(app: AppHandle, state: AppState) {
     state.set_monitoring_service_started(true);
     tauri::async_runtime::spawn(async move {
-        let mut monitor = ClipboardMonitor::default();
         loop {
             tokio::time::sleep(Duration::from_millis(MONITOR_INTERVAL_MS)).await;
             if !state.monitoring_enabled() {
@@ -65,12 +64,27 @@ pub fn start_monitoring(app: AppHandle, state: AppState) {
             }
 
             state.set_monitoring_running(true);
-            if let Err(error) = tick(&app, &state, &mut monitor) {
+            if let Err(error) = tick_with_shared_monitor(&app, &state) {
                 tracing::warn!(target: "clipboard", "clipboard monitor tick failed: {error}");
             }
             state.set_monitoring_running(false);
         }
     });
+}
+
+pub fn capture_clipboard_now(app: &AppHandle, state: &AppState) -> AppResult<()> {
+    if !state.monitoring_enabled() {
+        return Ok(());
+    }
+
+    state.set_monitoring_running(true);
+    let result = tick_with_shared_monitor(app, state);
+    state.set_monitoring_running(false);
+    result
+}
+
+fn tick_with_shared_monitor(app: &AppHandle, state: &AppState) -> AppResult<()> {
+    state.clipboard_monitor_mut(|monitor| tick(app, state, monitor))
 }
 
 pub fn build_text_insert_input(

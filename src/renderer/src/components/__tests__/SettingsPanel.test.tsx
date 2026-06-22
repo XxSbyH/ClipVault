@@ -59,7 +59,7 @@ vi.mock('@/lib/tauriApi', () => ({
 
 const defaultSettings: AppSettings = {
   retentionDays: 7,
-  maxItems: 1000,
+  maxItems: 10000,
   enableSensitiveFilter: true,
   enableBlacklist: true,
   textLimitKb: 100,
@@ -170,6 +170,45 @@ describe('SettingsPanel', () => {
 
     await waitFor(() => {
       expect(updateSettingMock).toHaveBeenCalledWith('themeMode', 'dark');
+    });
+  });
+
+  it('does not save maximum item count while the number field is incomplete', async () => {
+    renderPanel('general');
+
+    await waitFor(() => expect(getSettingsMock).toHaveBeenCalled());
+    const maxItemsInput = screen.getByDisplayValue('10000');
+    fireEvent.change(maxItemsInput, { target: { value: '' } });
+    fireEvent.blur(maxItemsInput);
+
+    expect(updateSettingMock).not.toHaveBeenCalled();
+    expect(maxItemsInput).toHaveValue(10000);
+  });
+
+  it('saves maximum item count only after editing is committed', async () => {
+    renderPanel('general');
+
+    await waitFor(() => expect(getSettingsMock).toHaveBeenCalled());
+    const maxItemsInput = screen.getByDisplayValue('10000');
+    fireEvent.change(maxItemsInput, { target: { value: '5000' } });
+    expect(updateSettingMock).not.toHaveBeenCalled();
+    fireEvent.blur(maxItemsInput);
+
+    await waitFor(() => {
+      expect(updateSettingMock).toHaveBeenCalledWith('maxItems', 5000);
+    });
+  });
+
+  it('allows maximum item count up to one million', async () => {
+    renderPanel('general');
+
+    await waitFor(() => expect(getSettingsMock).toHaveBeenCalled());
+    const maxItemsInput = screen.getByDisplayValue('10000');
+    fireEvent.change(maxItemsInput, { target: { value: '1000000' } });
+    fireEvent.blur(maxItemsInput);
+
+    await waitFor(() => {
+      expect(updateSettingMock).toHaveBeenCalledWith('maxItems', 1_000_000);
     });
   });
 

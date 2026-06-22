@@ -19,6 +19,10 @@ use crate::{
 
 const WHEEL_DEBOUNCE_MS: u128 = 180;
 const QUICK_PASTE_CURSOR_IDLE_RESET: Duration = Duration::from_secs(5 * 60);
+const CUT_CAPTURE_DELAY_MS: u64 = 160;
+const WIN_MSG_KEYDOWN: u32 = 0x0100;
+const WIN_MSG_SYSKEYDOWN: u32 = 0x0104;
+const VK_X_CODE: u32 = b'X' as u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickPasteDirection {
@@ -125,6 +129,12 @@ pub fn register_global_shortcuts(app: &AppHandle) -> AppResult<()> {
             "wheel shortcut hook failed to start; keyboard quick paste remains available: {error}"
         );
     }
+    if let Err(error) = start_cut_capture_hook(app) {
+        tracing::warn!(
+            target: "hotkeys",
+            "cut capture hook failed to start; clipboard polling remains available: {error}"
+        );
+    }
     Ok(())
 }
 
@@ -229,6 +239,10 @@ pub fn start_wheel_hook_with_options(app: &AppHandle, options: WheelHookOptions)
 
 pub fn stop_wheel_hook() -> AppResult<()> {
     wheel::stop()
+}
+
+pub fn start_cut_capture_hook(app: &AppHandle) -> AppResult<()> {
+    keyboard_capture::start(app)
 }
 
 pub fn check_system_hotkey_available(app: &AppHandle, hotkey: &str) -> HotkeyAvailabilityProbe {
@@ -516,6 +530,10 @@ fn modifier_matches_state(
     }
 }
 
+fn should_capture_cut_shortcut(message: u32, vk_code: u32, ctrl_down: bool) -> bool {
+    ctrl_down && vk_code == VK_X_CODE && matches!(message, WIN_MSG_KEYDOWN | WIN_MSG_SYSKEYDOWN)
+}
+
 #[cfg(target_os = "windows")]
 mod wheel {
     use std::{
@@ -746,6 +764,208 @@ mod wheel {
     }
 
     pub fn stop() -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod keyboard_capture {
+    use std::{
+        sync::{mpsc, Mutex, OnceLock},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use ::windows::Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+        System::Threading::GetCurrentThreadId,
+        UI::{
+            Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL},
+            WindowsAndMessaging::{
+                CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
+                SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK,
+                KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WM_QUIT,
+            },
+        },
+    };
+    use tauri::{AppHandle, Manager};
+
+    use super::{should_capture_cut_shortcut, CUT_CAPTURE_DELAY_MS, WHEEL_DEBOUNCE_MS};
+    use crate::{commands::AppState, errors::AppResult};
+
+    static RUNTIME: OnceLock<Mutex<Option<CutCaptureRuntime>>> = OnceLock::new();
+
+    struct CutCaptureRuntime {
+        hook: isize,
+        thread_id: u32,
+        app: AppHandle,
+        last_triggered_at: Instant,
+    }
+
+    pub fn start(app: &AppHandle) -> AppResult<()> {
+        stop()?;
+
+        let app = app.clone();
+        let (tx, rx) = mpsc::channel::<Result<(), String>>();
+        thread::Builder::new()
+            .name("clipvault-cut-capture-hook".to_string())
+            .spawn(move || {
+                let thread_id = unsafe { GetCurrentThreadId() };
+                let mut bootstrap_message = MSG::default();
+                let _ = unsafe {
+                    PeekMessageW(&mut bootstrap_message, HWND::default(), 0, 0, PM_NOREMOVE)
+                };
+
+                let hook = unsafe {
+                    SetWindowsHookExW(
+                        WH_KEYBOARD_LL,
+                        Some(keyboard_hook_proc),
+                        HINSTANCE::default(),
+                        0,
+                    )
+                };
+
+                let hook = match hook {
+                    Ok(hook) => hook,
+                    Err(error) => {
+                        let _ =
+                            tx.send(Err(format!("failed to install cut capture hook: {error}")));
+                        return;
+                    }
+                };
+
+                {
+                    let mut runtime = runtime().lock().expect("cut capture hook lock poisoned");
+                    *runtime = Some(CutCaptureRuntime {
+                        hook: hook.0 as isize,
+                        thread_id,
+                        app,
+                        last_triggered_at: Instant::now()
+                            .checked_sub(Duration::from_millis(WHEEL_DEBOUNCE_MS as u64))
+                            .unwrap_or_else(Instant::now),
+                    });
+                }
+                let _ = tx.send(Ok(()));
+                message_loop();
+                clear_runtime_for_thread(thread_id, hook.0 as isize);
+            })
+            .map_err(|error| format!("failed to spawn cut capture hook thread: {error}"))?;
+
+        rx.recv_timeout(Duration::from_secs(2))
+            .map_err(|error| format!("cut capture hook startup timed out: {error}"))?
+            .map_err(Into::into)
+    }
+
+    pub fn stop() -> AppResult<()> {
+        let runtime = runtime()
+            .lock()
+            .expect("cut capture hook lock poisoned")
+            .take();
+        let Some(runtime) = runtime else {
+            return Ok(());
+        };
+
+        let hook = HHOOK(runtime.hook as *mut _);
+        let _ = unsafe { UnhookWindowsHookEx(hook) };
+        let _ = unsafe { PostThreadMessageW(runtime.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
+        Ok(())
+    }
+
+    fn runtime() -> &'static Mutex<Option<CutCaptureRuntime>> {
+        RUNTIME.get_or_init(|| Mutex::new(None))
+    }
+
+    fn clear_runtime_for_thread(thread_id: u32, hook: isize) {
+        let mut runtime = runtime().lock().expect("cut capture hook lock poisoned");
+        if runtime
+            .as_ref()
+            .is_some_and(|current| current.thread_id == thread_id && current.hook == hook)
+        {
+            *runtime = None;
+        }
+    }
+
+    fn message_loop() {
+        let mut message = MSG::default();
+        loop {
+            let result = unsafe { GetMessageW(&mut message, HWND::default(), 0, 0) };
+            if result.0 <= 0 {
+                break;
+            }
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+
+    unsafe extern "system" fn keyboard_hook_proc(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code == HC_ACTION as i32 {
+            handle_keyboard_event(wparam, lparam);
+        }
+        CallNextHookEx(HHOOK::default(), code, wparam, lparam)
+    }
+
+    fn handle_keyboard_event(wparam: WPARAM, lparam: LPARAM) {
+        let Some(vk_code) = read_vk_code(lparam) else {
+            return;
+        };
+        if !should_capture_cut_shortcut(wparam.0 as u32, vk_code, key_is_down(VK_CONTROL.0)) {
+            return;
+        }
+
+        let app = {
+            let mut runtime = runtime().lock().expect("cut capture hook lock poisoned");
+            let Some(runtime) = runtime.as_mut() else {
+                return;
+            };
+            if runtime.last_triggered_at.elapsed().as_millis() < WHEEL_DEBOUNCE_MS {
+                return;
+            }
+            runtime.last_triggered_at = Instant::now();
+            runtime.app.clone()
+        };
+
+        trigger_cut_capture(app);
+    }
+
+    fn read_vk_code(lparam: LPARAM) -> Option<u32> {
+        if lparam.0 == 0 {
+            return None;
+        }
+        let hook = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        Some(hook.vkCode)
+    }
+
+    fn key_is_down(vkey: u16) -> bool {
+        unsafe { GetAsyncKeyState(i32::from(vkey)) & 0x8000u16 as i16 != 0 }
+    }
+
+    fn trigger_cut_capture(app: AppHandle) {
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(CUT_CAPTURE_DELAY_MS));
+            let Some(state) = app.try_state::<AppState>() else {
+                return;
+            };
+            let state = state.inner().clone();
+            if let Err(error) = crate::clipboard::capture_clipboard_now(&app, &state) {
+                tracing::warn!(target: "clipboard", "cut clipboard capture failed: {error}");
+            }
+        });
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod keyboard_capture {
+    use tauri::AppHandle;
+
+    use crate::errors::AppResult;
+
+    pub fn start(_app: &AppHandle) -> AppResult<()> {
         Ok(())
     }
 }
@@ -1138,6 +1358,35 @@ mod tests {
             WheelShortcutModifier::Shift,
             false,
             false,
+            true
+        ));
+    }
+
+    #[test]
+    fn keyboard_capture_detects_ctrl_x_cut_shortcut() {
+        assert!(super::should_capture_cut_shortcut(
+            0x0100,
+            b'X' as u32,
+            true
+        ));
+        assert!(super::should_capture_cut_shortcut(
+            0x0104,
+            b'X' as u32,
+            true
+        ));
+        assert!(!super::should_capture_cut_shortcut(
+            0x0100,
+            b'C' as u32,
+            true
+        ));
+        assert!(!super::should_capture_cut_shortcut(
+            0x0100,
+            b'X' as u32,
+            false
+        ));
+        assert!(!super::should_capture_cut_shortcut(
+            0x0101,
+            b'X' as u32,
             true
         ));
     }

@@ -64,7 +64,7 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   retentionDays: 7,
-  maxItems: 1000,
+  maxItems: 10000,
   enableSensitiveFilter: true,
   enableBlacklist: true,
   textLimitKb: 100,

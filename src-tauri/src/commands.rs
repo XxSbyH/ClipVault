@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_autostart::ManagerExt as _;
 
 use crate::{
+    clipboard::ClipboardMonitor,
     database::repository::Repository,
     errors::{AppError, AppResult},
     events,
@@ -25,7 +26,8 @@ use crate::{
     paste, settings, windows,
 };
 
-const DEFAULT_HISTORY_LIMIT: i64 = 1000;
+const DEFAULT_HISTORY_LIMIT: i64 = 10_000;
+const MAX_HISTORY_LIMIT: i64 = 1_000_000;
 
 #[derive(Debug)]
 struct MonitoringRuntimeState {
@@ -52,6 +54,7 @@ impl Default for MonitoringRuntimeState {
 pub struct AppState {
     repository: Arc<Repository>,
     monitoring: Arc<Mutex<MonitoringRuntimeState>>,
+    clipboard_monitor: Arc<Mutex<ClipboardMonitor>>,
     history_revision: Arc<AtomicU64>,
     quick_paste_cursor: Arc<Mutex<QuickPasteCursor>>,
 }
@@ -61,6 +64,7 @@ impl AppState {
         Self {
             repository: Arc::new(repository),
             monitoring: Arc::new(Mutex::new(MonitoringRuntimeState::default())),
+            clipboard_monitor: Arc::new(Mutex::new(ClipboardMonitor::default())),
             history_revision: Arc::new(AtomicU64::new(0)),
             quick_paste_cursor: Arc::new(Mutex::new(QuickPasteCursor::default())),
         }
@@ -87,6 +91,14 @@ impl AppState {
             .lock()
             .expect("quick paste cursor lock poisoned");
         f(&mut cursor)
+    }
+
+    pub fn clipboard_monitor_mut<T>(&self, f: impl FnOnce(&mut ClipboardMonitor) -> T) -> T {
+        let mut monitor = self
+            .clipboard_monitor
+            .lock()
+            .expect("clipboard monitor lock poisoned");
+        f(&mut monitor)
     }
 
     pub fn monitoring_enabled(&self) -> bool {
@@ -1123,7 +1135,7 @@ fn monitoring_status(monitoring: &MonitoringRuntimeState) -> MonitoringStatus {
 }
 
 fn normalize_limit(limit: i64) -> i64 {
-    limit.clamp(1, DEFAULT_HISTORY_LIMIT)
+    limit.clamp(1, MAX_HISTORY_LIMIT)
 }
 
 fn normalize_hotkey_patch_value(key: &str, value: &str) -> AppResult<String> {
@@ -1478,6 +1490,13 @@ mod tests {
 
         assert_eq!(settings.text_limit_kb, 64);
         assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_history_limit_clamps_to_supported_max_items() {
+        assert_eq!(super::normalize_limit(1_000_000), 1_000_000);
+        assert_eq!(super::normalize_limit(1_000_001), 1_000_000);
+        assert_eq!(super::normalize_limit(0), 1);
     }
 
     #[test]
