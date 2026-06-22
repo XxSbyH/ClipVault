@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_autostart::ManagerExt as _;
 
 use crate::{
-    clipboard::ClipboardMonitor,
+    clipboard::{self, ClipboardMonitor},
     database::repository::Repository,
     errors::{AppError, AppResult},
     events,
@@ -239,6 +239,7 @@ where
         });
     }
 
+    clipboard::remember_internal_clipboard_write(state, &item);
     let item = state.repository().increment_use_stats(id)?;
     let revision = state.bump_history_revision();
     Ok(PasteResult {
@@ -271,6 +272,7 @@ where
         });
     }
 
+    clipboard::remember_internal_clipboard_write(state, &item);
     let item = state.repository().increment_use_stats(id)?;
     let revision = state.bump_history_revision();
     Ok(PasteResult {
@@ -1404,6 +1406,21 @@ mod tests {
     }
 
     #[test]
+    fn commands_paste_item_marks_clipboard_hash_as_internal_write() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha", "hash-alpha"))
+            .unwrap();
+
+        let result = super::paste_item_impl(&state, item.id, |_| Ok(())).unwrap();
+        let last_hash = state.clipboard_monitor_mut(|monitor| monitor.last_hash().to_string());
+
+        assert!(result.success);
+        assert_eq!(last_hash, item.content_hash);
+    }
+
+    #[test]
     fn commands_paste_item_failure_does_not_update_use_stats() {
         let state = super::AppState::new(repo());
         let item = state
@@ -1441,6 +1458,21 @@ mod tests {
         assert_eq!(stored.use_count, 1);
         assert!(stored.last_used_at.is_some());
         assert_eq!(state.history_revision(), 1);
+    }
+
+    #[test]
+    fn commands_copy_item_marks_clipboard_hash_as_internal_write() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha", "hash-alpha"))
+            .unwrap();
+
+        let result = super::copy_item_impl(&state, item.id, |_| Ok(())).unwrap();
+        let last_hash = state.clipboard_monitor_mut(|monitor| monitor.last_hash().to_string());
+
+        assert!(result.success);
+        assert_eq!(last_hash, item.content_hash);
     }
 
     #[test]

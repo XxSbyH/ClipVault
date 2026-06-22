@@ -11,7 +11,7 @@ use crate::{
     detector::{create_preview, detect_content_type, parse_single_file_path},
     errors::{AppError, AppResult},
     events,
-    models::{ClipboardContentType, ClipboardInsertInput, ClipboardMetadata},
+    models::{ClipboardContentType, ClipboardInsertInput, ClipboardItem, ClipboardMetadata},
     privacy::{filter::is_sensitive_content, foreground::is_blacklisted_foreground_app},
 };
 
@@ -81,6 +81,13 @@ pub fn capture_clipboard_now(app: &AppHandle, state: &AppState) -> AppResult<()>
     let result = tick_with_shared_monitor(app, state);
     state.set_monitoring_running(false);
     result
+}
+
+pub fn remember_internal_clipboard_write(state: &AppState, item: &ClipboardItem) {
+    state.clipboard_monitor_mut(|monitor| {
+        monitor.remember_hash(item.content_hash.clone());
+    });
+    state.set_monitoring_last_hash(&item.content_hash);
 }
 
 fn tick_with_shared_monitor(app: &AppHandle, state: &AppState) -> AppResult<()> {
