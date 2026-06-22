@@ -204,9 +204,10 @@ jobs:
           name: ClipVault ${{ github.ref_name }}
           body: |
             更新内容：
-            - 详情面板文本内容改为展示完整剪贴板文本，并保留滚动查看。
-            - 修复快捷键浏览历史时，复制项被刷新到最新位置后游标顺序跳回的问题。
-            - Release 资产新增 macOS universal `.dmg` 和 `.app.zip`，当前 macOS 包未进行 Apple 签名/公证。
+            - 将最大历史条目数默认值调整为 10000。
+            - 修复修改最大历史条目数时可能清空已有历史记录的问题。
+            - 修复最大历史条目数输入 1000000 后失焦回退为 10000 的问题。
+            - 支持将 Ctrl+X 剪切后的剪贴板内容写入历史记录。
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
