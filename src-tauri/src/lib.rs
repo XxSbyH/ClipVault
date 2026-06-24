@@ -1,3 +1,4 @@
+pub mod autostart;
 pub mod cleanup;
 pub mod clipboard;
 pub mod commands;
@@ -28,14 +29,11 @@ pub fn run() {
     logger::init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = windows::show_main_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if autostart::should_show_main_window_for_args(args) {
+                let _ = windows::show_main_window(app);
+            }
         }))
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .app_name("ClipVault")
-                .build(),
-        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
@@ -43,11 +41,18 @@ pub fn run() {
             fs::create_dir_all(&app_data_dir)?;
             let repository = Repository::open(app_data_dir.join("clipboard.db"))?;
             let state = commands::AppState::new(repository);
+            let settings = state.repository().get_settings()?;
+            if settings.launch_on_startup {
+                autostart::sync_launch_on_startup(true)?;
+            }
             clipboard::start_monitoring(app.handle().clone(), state.clone());
             app.manage(state);
             windows::configure_windows(app.handle())?;
             tray::create_tray(app.handle())?;
             hotkeys::register_global_shortcuts(app.handle())?;
+            if autostart::should_show_main_window_for_env_args() {
+                windows::show_main_window(app.handle())?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

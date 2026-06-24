@@ -10,9 +10,9 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State, Window};
-use tauri_plugin_autostart::ManagerExt as _;
 
 use crate::{
+    autostart,
     clipboard::{self, ClipboardMonitor},
     database::repository::Repository,
     errors::{AppError, AppResult},
@@ -748,11 +748,11 @@ pub fn update_setting(
     }
 
     let before_revision = state.history_revision();
-    let should_apply_autostart = key == "launchOnStartup";
-    let settings = update_setting_impl(state.inner(), key, value)?;
-    if should_apply_autostart {
-        apply_setting_side_effect(&app, &settings)?;
-    }
+    let settings = if key == "launchOnStartup" {
+        update_launch_on_startup_setting(state.inner(), key, value)?
+    } else {
+        update_setting_impl(state.inner(), key, value)?
+    };
     let after_revision = state.history_revision();
     if after_revision != before_revision {
         emit_history_revision(&app, after_revision);
@@ -1005,17 +1005,30 @@ fn emit_history_revision(app: &AppHandle, revision: u64) {
     );
 }
 
-fn apply_setting_side_effect(app: &AppHandle, settings: &AppSettings) -> AppResult<()> {
-    if settings.launch_on_startup {
-        app.autolaunch()
-            .enable()
-            .map_err(|err| AppError::from(format!("failed to enable autostart: {err}")))?;
-    } else {
-        app.autolaunch()
-            .disable()
-            .map_err(|err| AppError::from(format!("failed to disable autostart: {err}")))?;
+fn update_launch_on_startup_setting(
+    state: &AppState,
+    key: String,
+    value: Value,
+) -> AppResult<AppSettings> {
+    let launch_on_startup = serde_json::from_value::<bool>(value.clone())
+        .map_err(|_| AppError::from(format!("invalid value for setting {key}")))?;
+    let current = state.repository().get_settings()?;
+
+    autostart::sync_launch_on_startup(launch_on_startup)
+        .map_err(|err| AppError::from(format!("failed to update autostart: {err}")))?;
+
+    match update_setting_impl(state, key, value) {
+        Ok(settings) => Ok(settings),
+        Err(error) => {
+            if let Err(restore_error) = autostart::sync_launch_on_startup(current.launch_on_startup)
+            {
+                return Err(AppError::from(format!(
+                    "{error}; failed to restore previous autostart state: {restore_error}"
+                )));
+            }
+            Err(error)
+        }
     }
-    Ok(())
 }
 
 fn update_wheel_shortcut_setting(
