@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FixedSizeList as List, type ListChildComponentProps } from 'react-window';
-import type { ClipboardItem as ClipboardItemType } from '@shared/types';
+import type { ClipboardItem as ClipboardItemType, SpecialPasteAction } from '@shared/types';
+import { ClipboardItemContextMenu } from '@/components/ClipboardItemContextMenu';
 import { ClipboardItem } from '@/components/ClipboardItem';
 import { EmptyState } from '@/components/EmptyState';
+import { TextWorkbenchDialog } from '@/components/TextWorkbenchDialog';
 import { clipboardApi } from '@/lib/tauriApi';
 import { getHistoryFetchLimit } from '@/lib/historyLimit';
 import { itemMatchesSearchQuery } from '@/lib/search';
@@ -13,11 +15,27 @@ const ITEM_HEIGHT = 78;
 interface RowData {
   items: ClipboardItemType[];
   selectedId: number | null;
-  onCopy: (id: number) => void;
+  onPaste: (id: number) => void;
   onTogglePin: (id: number) => void;
   onToggleFavorite: (id: number) => void;
   onDelete: (id: number) => void;
   onSelect: (id: number) => void;
+  onContextMenu: (item: ClipboardItemType, x: number, y: number) => void;
+}
+
+interface FixedContentPrefill {
+  title: string;
+  content: string;
+}
+
+interface ClipboardListProps {
+  onAddFixedContent?: (prefill: FixedContentPrefill) => void;
+}
+
+interface ContextMenuState {
+  itemId: number;
+  x: number;
+  y: number;
 }
 
 function filterItems(
@@ -48,11 +66,12 @@ function Row({ index, style, data }: ListChildComponentProps<RowData>): JSX.Elem
       <ClipboardItem
         item={item}
         selected={data.selectedId === item.id}
-        onCopy={data.onCopy}
+        onPaste={data.onPaste}
         onTogglePin={data.onTogglePin}
         onToggleFavorite={data.onToggleFavorite}
         onDelete={data.onDelete}
         onSelect={data.onSelect}
+        onContextMenu={data.onContextMenu}
       />
     </div>
   );
@@ -73,7 +92,15 @@ function shouldIgnoreGlobalShortcut(event: KeyboardEvent): boolean {
   return Boolean(target.closest('[role="dialog"]'));
 }
 
-export function ClipboardList(): JSX.Element {
+function fixedContentTitleFromItem(item: ClipboardItemType, content: string): string {
+  const firstLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  return (firstLine || item.preview || '固定内容').slice(0, 48);
+}
+
+export function ClipboardList({ onAddFixedContent }: ClipboardListProps = {}): JSX.Element {
   const items = useClipboardStore((state) => state.items);
   const searchQuery = useClipboardStore((state) => state.searchQuery);
   const selectedType = useClipboardStore((state) => state.selectedType);
@@ -88,8 +115,20 @@ export function ClipboardList(): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const copyQueueRef = useRef<Promise<void>>(Promise.resolve());
   const copyRequestSeqRef = useRef(0);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [workbenchItemId, setWorkbenchItemId] = useState<number | null>(null);
 
   const filteredItems = useMemo(() => filterItems(items, selectedType, searchQuery), [items, searchQuery, selectedType]);
+
+  const contextMenuItem = useMemo(
+    () => (contextMenu ? items.find((item) => item.id === contextMenu.itemId) ?? null : null),
+    [contextMenu, items]
+  );
+
+  const workbenchItem = useMemo(
+    () => (workbenchItemId ? items.find((item) => item.id === workbenchItemId) ?? null : null),
+    [items, workbenchItemId]
+  );
 
   const selectedIndex = useMemo(
     () => filteredItems.findIndex((item) => item.id === selectedItemId),
@@ -119,6 +158,14 @@ export function ClipboardList(): JSX.Element {
   const refreshHistory = useCallback(() => {
     void clipboardApi.getHistory(getHistoryFetchLimit(settings)).then(setItems);
   }, [setItems, settings]);
+
+  const onPaste = useCallback(
+    (id: number) => {
+      setSelectedItemId(id);
+      void clipboardApi.pasteItem(id);
+    },
+    [setSelectedItemId]
+  );
 
   const onCopy = useCallback(
     (id: number) => {
@@ -191,6 +238,59 @@ export function ClipboardList(): JSX.Element {
     [setSelectedItemId]
   );
 
+  const openContextMenu = useCallback((item: ClipboardItemType, x: number, y: number) => {
+    setContextMenu({ itemId: item.id, x, y });
+  }, []);
+
+  const onSpecialPaste = useCallback(
+    (item: ClipboardItemType, action: SpecialPasteAction) => {
+      setContextMenu(null);
+      setSelectedItemId(item.id);
+      void clipboardApi.specialPasteItem(item.id, action).then((result) => {
+        if (result.success && result.item) {
+          upsertItem(result.item);
+          setSelectedItemId(result.item.id);
+        }
+      });
+    },
+    [setSelectedItemId, upsertItem]
+  );
+
+  const openWorkbench = useCallback((item: ClipboardItemType) => {
+    setContextMenu(null);
+    setWorkbenchItemId(item.id);
+  }, []);
+
+  const addFixedContentFromItem = useCallback(
+    (item: ClipboardItemType, content = item.content ?? item.preview) => {
+      setContextMenu(null);
+      const prefill = {
+        title: fixedContentTitleFromItem(item, content),
+        content
+      };
+      onAddFixedContent?.(prefill);
+    },
+    [onAddFixedContent]
+  );
+
+  const saveCurrentTextItem = useCallback(
+    async (item: ClipboardItemType, content: string) => {
+      const updated = await clipboardApi.updateTextItem(item.id, content);
+      upsertItem(updated);
+      setSelectedItemId(updated.id);
+    },
+    [setSelectedItemId, upsertItem]
+  );
+
+  const saveNewTextItem = useCallback(
+    async (content: string) => {
+      const item = await clipboardApi.createTextItem(content);
+      upsertItem(item);
+      setSelectedItemId(item.id);
+    },
+    [setSelectedItemId, upsertItem]
+  );
+
   useEffect(() => {
     if (filteredItems.length === 0) {
       setSelectedItemId(null);
@@ -202,6 +302,12 @@ export function ClipboardList(): JSX.Element {
   }, [filteredItems, selectedItemId, setSelectedItemId]);
 
   useEffect(() => {
+    if (selectedIndex >= 0) {
+      listRef.current?.scrollToItem(selectedIndex, 'smart');
+    }
+  }, [selectedIndex]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (shouldIgnoreGlobalShortcut(event)) {
         return;
@@ -211,6 +317,10 @@ export function ClipboardList(): JSX.Element {
         return;
       }
       if (event.key === 'Escape') {
+        if (contextMenu) {
+          setContextMenu(null);
+          return;
+        }
         void clipboardApi.hideWindow();
         return;
       }
@@ -237,6 +347,10 @@ export function ClipboardList(): JSX.Element {
       }
       if (event.key === 'Enter' && selectedItemId) {
         event.preventDefault();
+        onPaste(selectedItemId);
+      }
+      if (event.ctrlKey && event.key.toLowerCase() === 'c' && selectedItemId) {
+        event.preventDefault();
         onCopy(selectedItemId);
       }
       if (event.key === 'Delete' && selectedItemId) {
@@ -255,7 +369,18 @@ export function ClipboardList(): JSX.Element {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [filteredItems, onCopy, onDelete, onToggleFavorite, onTogglePin, selectedIndex, selectedItemId, setSelectedItemId]);
+  }, [
+    contextMenu,
+    filteredItems,
+    onCopy,
+    onDelete,
+    onPaste,
+    onToggleFavorite,
+    onTogglePin,
+    selectedIndex,
+    selectedItemId,
+    setSelectedItemId
+  ]);
 
   return (
     <div
@@ -274,16 +399,44 @@ export function ClipboardList(): JSX.Element {
           itemData={{
             items: filteredItems,
             selectedId: selectedItemId,
-            onCopy,
+            onPaste,
             onTogglePin,
             onToggleFavorite,
             onDelete,
-            onSelect
+            onSelect,
+            onContextMenu: openContextMenu
           }}
         >
           {Row}
         </List>
       )}
+      {contextMenu && contextMenuItem ? (
+        <ClipboardItemContextMenu
+          item={contextMenuItem}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          onSpecialPaste={onSpecialPaste}
+          onEdit={openWorkbench}
+          onAddFixedContent={(item) => addFixedContentFromItem(item)}
+          onDelete={(id) => {
+            setContextMenu(null);
+            onDelete(id);
+          }}
+        />
+      ) : null}
+      <TextWorkbenchDialog
+        open={Boolean(workbenchItem)}
+        item={workbenchItem}
+        onOpenChange={(open) => {
+          if (!open) {
+            setWorkbenchItemId(null);
+          }
+        }}
+        onSaveCurrent={saveCurrentTextItem}
+        onSaveNew={saveNewTextItem}
+        onAddFixedContent={(item, content) => addFixedContentFromItem(item, content)}
+      />
     </div>
   );
 }

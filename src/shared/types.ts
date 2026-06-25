@@ -93,6 +93,11 @@ export interface HudPayload {
   text: string;
 }
 
+export interface QuickPasteCursorPayload {
+  selectedItemId: number | null;
+  boundary: 'newest' | 'oldest' | null;
+}
+
 export interface MonitoringStatus {
   monitorEnabled: boolean;
   monitorStarted: boolean;
@@ -137,6 +142,17 @@ export interface FixedContentInput {
   enabled: boolean;
 }
 
+export type SpecialPasteAction =
+  | 'upper'
+  | 'lower'
+  | 'plain'
+  | 'camel'
+  | 'capitalize'
+  | 'sentence'
+  | 'removeNewlines'
+  | 'appendNewline'
+  | 'appendCurrentTime';
+
 export type FilterType = 'all' | 'text' | 'image' | 'code' | 'url' | 'favorite';
 
 export interface ClipboardApi {
@@ -144,6 +160,12 @@ export interface ClipboardApi {
   getHistoryRevision: () => Promise<number>;
   searchItems: (query: string) => Promise<ClipboardItem[]>;
   pasteItem: (id: number) => Promise<{ success: boolean; error?: string }>;
+  specialPasteItem: (
+    id: number,
+    action: SpecialPasteAction
+  ) => Promise<{ success: boolean; item?: ClipboardItem; error?: string }>;
+  updateTextItem: (id: number, content: string) => Promise<ClipboardItem>;
+  createTextItem: (content: string) => Promise<ClipboardItem>;
   copyItem: (id: number) => Promise<{ success: boolean; item?: ClipboardItem; error?: string }>;
   deleteItem: (id: number) => Promise<{ success: boolean; error?: string }>;
   togglePin: (id: number) => Promise<ClipboardItem | null>;
@@ -174,6 +196,7 @@ export interface ClipboardApi {
   testHud: () => Promise<{ success: boolean; reason?: string }>;
   onHudShow: (handler: (payload: HudPayload) => void) => () => void;
   onNewItem: (handler: (item: ClipboardItem) => void) => () => void;
+  onQuickPasteCursor: (handler: (payload: QuickPasteCursorPayload) => void) => () => void;
   onFocusSearch: (handler: () => void) => () => void;
   onOpenSettings: (handler: () => void) => () => void;
   onOpenHotkeys: (handler: () => void) => () => void;

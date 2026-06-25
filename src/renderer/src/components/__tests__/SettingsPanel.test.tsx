@@ -101,11 +101,15 @@ function makeFixedContent(
   };
 }
 
-function renderPanel(initialTab: 'general' | 'privacy' | 'hotkeys') {
+function renderPanel(
+  initialTab: 'general' | 'privacy' | 'hotkeys',
+  prefillFixedContent: { title: string; content: string; nonce: number } | null = null
+) {
   return render(
     <SettingsPanel
       open
       initialTab={initialTab as 'general'}
+      prefillFixedContent={prefillFixedContent}
       onOpenChange={vi.fn()}
     />
   );
@@ -267,6 +271,32 @@ describe('SettingsPanel', () => {
     expect(await screen.findByText('历史快速复制')).toBeInTheDocument();
     expect(screen.getByText('复制更旧的历史内容到剪贴板')).toBeInTheDocument();
     expect(screen.queryByText('快速粘贴')).not.toBeInTheDocument();
+  });
+
+  it('shows fixed content trial examples without creating records', async () => {
+    renderPanel('hotkeys');
+
+    expect(await screen.findByText('试用示例')).toBeInTheDocument();
+    expect(screen.getByText('收到，我稍后处理。')).toBeInTheDocument();
+    expect(createFixedContentMock).not.toHaveBeenCalled();
+  });
+
+  it('prefills the fixed content form from a trial example', async () => {
+    renderPanel('hotkeys');
+
+    fireEvent.click(await screen.findByRole('button', { name: '使用示例 常用回复' }));
+
+    expect(screen.getByLabelText('标题')).toHaveValue('常用回复');
+    expect(screen.getByLabelText('内容')).toHaveValue('收到，我稍后处理。');
+    expect(screen.getByRole('button', { name: '保存固定内容' })).toBeDisabled();
+  });
+
+  it('prefills the fixed content form from an external request', async () => {
+    renderPanel('hotkeys', { title: 'alpha', content: 'alpha content', nonce: 1 });
+
+    expect(await screen.findByLabelText('标题')).toHaveValue('alpha');
+    expect(screen.getByLabelText('内容')).toHaveValue('alpha content');
+    expect(screen.getByRole('button', { name: '保存固定内容' })).toBeDisabled();
   });
 
   it('renders fixed content hotkeys and creates a new one', async () => {

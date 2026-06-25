@@ -11,19 +11,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State, Window};
 
+#[cfg(not(target_os = "windows"))]
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::{
     autostart,
-    clipboard::{self, ClipboardMonitor},
+    clipboard::{self, CaptureDecision, CaptureSkipReason, ClipboardMonitor},
     database::repository::Repository,
     errors::{AppError, AppResult},
     events,
     hotkeys::{self, QuickPasteCursor, QuickPasteCursorSnapshot},
     models::{
-        AppSettings, BlacklistApp, ClipboardContentType, ClipboardItem, FixedContent,
-        FixedContentInput, HotkeySettings, HotkeySettingsPatch, HudDirection, HudPayload,
-        MonitoringStatus, WheelShortcutModifier, WheelShortcutScope,
+        AppSettings, BlacklistApp, ClipboardContentType, ClipboardInsertInput, ClipboardItem,
+        FixedContent, FixedContentInput, HotkeySettings, HotkeySettingsPatch, HudDirection,
+        HudPayload, MonitoringStatus, SpecialPasteAction, WheelShortcutModifier,
+        WheelShortcutScope,
     },
-    paste, settings, windows,
+    paste, settings, text_transform, windows,
 };
 
 const DEFAULT_HISTORY_LIMIT: i64 = 10_000;
@@ -194,6 +198,14 @@ struct KeyboardShortcutSnapshot {
     fixed_contents: Vec<FixedContent>,
 }
 
+struct TextHistoryInput {
+    content: String,
+    content_type: ClipboardContentType,
+    content_hash: String,
+    preview: String,
+    metadata: crate::models::ClipboardMetadata,
+}
+
 pub fn get_history_impl(state: &AppState, limit: Option<i64>) -> AppResult<Vec<ClipboardItem>> {
     state
         .repository()
@@ -281,6 +293,115 @@ where
         revision,
         message: "copied".to_string(),
     })
+}
+
+pub fn special_paste_item_impl<F, N>(
+    state: &AppState,
+    id: i64,
+    action: SpecialPasteAction,
+    paste_text: F,
+    now: N,
+) -> AppResult<PasteResult>
+where
+    F: FnOnce(&str) -> AppResult<()>,
+    N: FnOnce() -> String,
+{
+    let Some(item) = state.repository().get_item_by_id(id)? else {
+        return Ok(PasteResult {
+            success: false,
+            item: None,
+            revision: state.history_revision(),
+            message: "item not found".to_string(),
+        });
+    };
+
+    if !is_text_content_type(item.content_type) {
+        return Ok(PasteResult {
+            success: false,
+            item: Some(item),
+            revision: state.history_revision(),
+            message: "special paste requires text content".to_string(),
+        });
+    }
+
+    let Some(content) = item.content.as_deref() else {
+        return Ok(PasteResult {
+            success: false,
+            item: Some(item),
+            revision: state.history_revision(),
+            message: "clipboard item has no text content".to_string(),
+        });
+    };
+
+    let transformed =
+        text_transform::apply_text_action(content, text_action_from_special(action), now);
+    if let Err(error) = paste_text(&transformed) {
+        return Ok(PasteResult {
+            success: false,
+            item: Some(item),
+            revision: state.history_revision(),
+            message: error.to_string(),
+        });
+    }
+
+    clipboard::remember_internal_text_clipboard_write(state, &transformed);
+    let item = state.repository().increment_use_stats(id)?;
+    let revision = state.bump_history_revision();
+    Ok(PasteResult {
+        success: true,
+        item: Some(item),
+        revision,
+        message: "pasted".to_string(),
+    })
+}
+
+pub fn update_text_item_impl(
+    state: &AppState,
+    id: i64,
+    content: String,
+) -> AppResult<ClipboardItem> {
+    let Some(item) = state.repository().get_item_by_id(id)? else {
+        return Err(AppError::from(format!("clipboard item {id} not found")));
+    };
+    if !is_text_content_type(item.content_type) {
+        return Err(AppError::from(format!(
+            "clipboard item {id} is not a text item"
+        )));
+    }
+
+    let input = build_text_history_input(state, content)?;
+    let Some(item) = state.repository().update_text_item(
+        id,
+        &input.content,
+        input.content_type,
+        &input.content_hash,
+        &input.preview,
+        input.metadata,
+    )?
+    else {
+        return Err(AppError::from(format!("clipboard item {id} not found")));
+    };
+
+    state.bump_history_revision();
+    Ok(item)
+}
+
+pub fn create_text_item_impl(state: &AppState, content: String) -> AppResult<ClipboardItem> {
+    let input = build_text_history_input(state, content)?;
+    let item = state
+        .repository()
+        .insert_clipboard_item(crate::models::ClipboardInsertInput {
+            content: Some(input.content),
+            content_type: input.content_type,
+            content_hash: input.content_hash,
+            preview: input.preview,
+            metadata: Some(input.metadata),
+            file_path: None,
+            image_data: None,
+        })?;
+
+    state.bump_history_revision();
+    Ok(item)
 }
 
 pub fn delete_item_impl(state: &AppState, id: i64) -> AppResult<u64> {
@@ -651,6 +772,151 @@ pub fn test_hud_impl() -> HudPayload {
     )
 }
 
+fn build_text_history_input(state: &AppState, content: String) -> AppResult<TextHistoryInput> {
+    let settings = state.repository().get_settings()?;
+    match clipboard::build_text_insert_input(
+        &content,
+        settings.text_limit_kb,
+        settings.enable_sensitive_filter,
+        "",
+    ) {
+        CaptureDecision::Insert { input, .. } => {
+            let ClipboardInsertInput {
+                content,
+                content_type: detected_type,
+                content_hash,
+                preview,
+                metadata,
+                ..
+            } = *input;
+            if !is_text_content_type(detected_type) {
+                return Err(AppError::from(format!(
+                    "text history item does not support {} content",
+                    content_type_label(detected_type)
+                )));
+            }
+
+            let content = content.unwrap_or_default();
+
+            Ok(TextHistoryInput {
+                content,
+                content_type: detected_type,
+                content_hash,
+                preview,
+                metadata: metadata.unwrap_or_default(),
+            })
+        }
+        CaptureDecision::Skip(reason) => Err(capture_skip_error(reason)),
+    }
+}
+
+fn is_text_content_type(content_type: ClipboardContentType) -> bool {
+    matches!(
+        content_type,
+        ClipboardContentType::Text
+            | ClipboardContentType::Url
+            | ClipboardContentType::Code
+            | ClipboardContentType::Color
+            | ClipboardContentType::Email
+    )
+}
+
+fn capture_skip_error(reason: CaptureSkipReason) -> AppError {
+    match reason {
+        CaptureSkipReason::Empty => AppError::from("text content cannot be empty"),
+        CaptureSkipReason::Sensitive => AppError::from("text content rejected as sensitive"),
+        CaptureSkipReason::TooLarge => AppError::from("text content too large"),
+        CaptureSkipReason::Duplicate => AppError::from("text content already exists"),
+    }
+}
+
+fn content_type_label(content_type: ClipboardContentType) -> &'static str {
+    match content_type {
+        ClipboardContentType::Text => "text",
+        ClipboardContentType::Image => "image",
+        ClipboardContentType::File => "file",
+        ClipboardContentType::Url => "url",
+        ClipboardContentType::Code => "code",
+        ClipboardContentType::Color => "color",
+        ClipboardContentType::Email => "email",
+    }
+}
+
+fn text_action_from_special(action: SpecialPasteAction) -> text_transform::TextAction {
+    match action {
+        SpecialPasteAction::Upper => text_transform::TextAction::Upper,
+        SpecialPasteAction::Lower => text_transform::TextAction::Lower,
+        SpecialPasteAction::Plain => text_transform::TextAction::Plain,
+        SpecialPasteAction::Camel => text_transform::TextAction::Camel,
+        SpecialPasteAction::Capitalize => text_transform::TextAction::Capitalize,
+        SpecialPasteAction::Sentence => text_transform::TextAction::Sentence,
+        SpecialPasteAction::RemoveNewlines => text_transform::TextAction::RemoveNewlines,
+        SpecialPasteAction::AppendNewline => text_transform::TextAction::AppendNewline,
+        SpecialPasteAction::AppendCurrentTime => text_transform::TextAction::AppendCurrentTime,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn current_time_text() -> String {
+    use ::windows::Win32::System::SystemInformation::GetLocalTime;
+
+    let time = unsafe { GetLocalTime() };
+
+    format_datetime(
+        time.wYear,
+        time.wMonth,
+        time.wDay,
+        time.wHour,
+        time.wMinute,
+        time.wSecond,
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+fn current_time_text() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let (year, month, day, hour, minute, second) = unix_seconds_to_utc_datetime(seconds);
+    format_datetime(year, month, day, hour, minute, second)
+}
+
+fn format_datetime(year: u16, month: u16, day: u16, hour: u16, minute: u16, second: u16) -> String {
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn unix_seconds_to_utc_datetime(seconds: u64) -> (u16, u16, u16, u16, u16, u16) {
+    let days = (seconds / 86_400) as i64;
+    let seconds_of_day = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    (
+        year as u16,
+        month as u16,
+        day as u16,
+        (seconds_of_day / 3_600) as u16,
+        ((seconds_of_day % 3_600) / 60) as u16,
+        (seconds_of_day % 60) as u16,
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_unix_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era as i32 + era as i32 * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+    (year, month as u32, day as u32)
+}
+
 #[tauri::command]
 pub fn get_history(
     state: State<'_, AppState>,
@@ -699,6 +965,49 @@ pub fn copy_item(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResu
         }
     }
     Ok(result)
+}
+
+#[tauri::command]
+pub fn special_paste_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    action: SpecialPasteAction,
+) -> AppResult<PasteResult> {
+    let result = special_paste_item_impl(
+        state.inner(),
+        id,
+        action,
+        |text| paste::write_text_and_paste(&app, text),
+        current_time_text,
+    )?;
+    if result.success {
+        emit_history_revision(&app, result.revision);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn update_text_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    content: String,
+) -> AppResult<ClipboardItem> {
+    let item = update_text_item_impl(state.inner(), id, content)?;
+    emit_history_revision(&app, state.history_revision());
+    Ok(item)
+}
+
+#[tauri::command]
+pub fn create_text_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    content: String,
+) -> AppResult<ClipboardItem> {
+    let item = create_text_item_impl(state.inner(), content)?;
+    emit_history_revision(&app, state.history_revision());
+    Ok(item)
 }
 
 #[tauri::command]
@@ -1283,7 +1592,7 @@ mod tests {
         errors::AppError,
         models::{
             ClipboardContentType, ClipboardInsertInput, ClipboardMetadata, FixedContentInput,
-            HotkeySettingsPatch,
+            HotkeySettingsPatch, SpecialPasteAction,
         },
     };
 
@@ -1314,6 +1623,35 @@ mod tests {
             file_path: None,
             image_data: Some(image_data),
         }
+    }
+
+    fn content_hash(content_type: ClipboardContentType, content: &str) -> String {
+        let prefix = match content_type {
+            ClipboardContentType::Text => "text",
+            ClipboardContentType::Image => "image",
+            ClipboardContentType::File => "file",
+            ClipboardContentType::Url => "url",
+            ClipboardContentType::Code => "code",
+            ClipboardContentType::Color => "color",
+            ClipboardContentType::Email => "email",
+        };
+        format!(
+            "{:x}",
+            md5::compute(format!("{prefix}:{content}").as_bytes())
+        )
+    }
+
+    fn assert_readable_datetime_format(value: &str) {
+        let bytes = value.as_bytes();
+        assert_eq!(bytes.len(), 19);
+        for index in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18] {
+            assert!(bytes[index].is_ascii_digit(), "{value}");
+        }
+        assert_eq!(bytes[4], b'-');
+        assert_eq!(bytes[7], b'-');
+        assert_eq!(bytes[10], b' ');
+        assert_eq!(bytes[13], b':');
+        assert_eq!(bytes[16], b':');
     }
 
     fn fixed_content_input(
@@ -1400,6 +1738,11 @@ mod tests {
     }
 
     #[test]
+    fn commands_current_time_text_uses_readable_local_datetime_format() {
+        assert_readable_datetime_format(&super::current_time_text());
+    }
+
+    #[test]
     fn commands_paste_item_updates_use_stats_after_successful_paste() {
         let state = super::AppState::new(repo());
         let item = state
@@ -1451,6 +1794,239 @@ mod tests {
         assert_eq!(result.revision, 0);
         assert_eq!(stored.use_count, 0);
         assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_special_paste_applies_text_transform_and_updates_stats() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha beta", "hash-alpha"))
+            .unwrap();
+        let mut pasted = String::new();
+
+        let result = super::special_paste_item_impl(
+            &state,
+            item.id,
+            SpecialPasteAction::Camel,
+            |text| {
+                pasted = text.to_string();
+                Ok(())
+            },
+            || "2026-06-25 10:20:30".to_string(),
+        )
+        .unwrap();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(result.success);
+        assert_eq!(pasted, "alphaBeta");
+        assert_eq!(result.message, "pasted");
+        assert_eq!(result.item.as_ref().map(|item| item.use_count), Some(1));
+        assert_eq!(stored.use_count, 1);
+        assert!(stored.last_used_at.is_some());
+        assert_eq!(state.history_revision(), 1);
+    }
+
+    #[test]
+    fn commands_special_paste_marks_transformed_text_hash_as_internal_write() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha beta", "hash-alpha"))
+            .unwrap();
+        let expected_hash = content_hash(ClipboardContentType::Text, "alphaBeta");
+
+        let result = super::special_paste_item_impl(
+            &state,
+            item.id,
+            SpecialPasteAction::Camel,
+            |_| Ok(()),
+            || "2026-06-25 10:20:30".to_string(),
+        )
+        .unwrap();
+        let last_hash = state.clipboard_monitor_mut(|monitor| monitor.last_hash().to_string());
+
+        assert!(result.success);
+        assert_ne!(expected_hash, item.content_hash);
+        assert_eq!(last_hash, expected_hash);
+    }
+
+    #[test]
+    fn commands_special_paste_failure_does_not_update_stats_revision_or_internal_hash() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("alpha beta", "hash-alpha"))
+            .unwrap();
+
+        let result = super::special_paste_item_impl(
+            &state,
+            item.id,
+            SpecialPasteAction::Upper,
+            |_| Err(AppError::from("paste failed")),
+            || "2026-06-25 10:20:30".to_string(),
+        )
+        .unwrap();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+        let last_hash = state.clipboard_monitor_mut(|monitor| monitor.last_hash().to_string());
+
+        assert!(!result.success);
+        assert!(result.message.contains("paste failed"));
+        assert_eq!(stored.use_count, 0);
+        assert_eq!(state.history_revision(), 0);
+        assert_eq!(last_hash, "");
+    }
+
+    #[test]
+    fn commands_special_paste_rejects_image_items() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(image_input("hash-image", vec![1, 2, 3]))
+            .unwrap();
+        let mut called = false;
+
+        let result = super::special_paste_item_impl(
+            &state,
+            item.id,
+            SpecialPasteAction::Upper,
+            |_| {
+                called = true;
+                Ok(())
+            },
+            || "2026-06-25 10:20:30".to_string(),
+        )
+        .unwrap();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(!result.success);
+        assert!(result.message.contains("text"));
+        assert!(!called);
+        assert_eq!(stored.use_count, 0);
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_update_text_item_changes_content_preview_and_hash() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("old", "hash-old"))
+            .unwrap();
+        let expected_hash = content_hash(ClipboardContentType::Url, "https://example.com/path");
+
+        let updated =
+            super::update_text_item_impl(&state, item.id, " https://example.com/path ".to_string())
+                .unwrap();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert_eq!(updated.content.as_deref(), Some("https://example.com/path"));
+        assert_eq!(updated.content_type, ClipboardContentType::Url);
+        assert_eq!(updated.preview, "https://example.com/path");
+        assert_eq!(updated.content_hash, expected_hash);
+        assert_eq!(stored, updated);
+        assert_eq!(state.history_revision(), 1);
+    }
+
+    #[test]
+    fn commands_update_text_item_rejects_duplicate_content_hash() {
+        let state = super::AppState::new(repo());
+        state
+            .repository()
+            .insert_clipboard_item(text_input(
+                "duplicate",
+                &content_hash(ClipboardContentType::Text, "duplicate"),
+            ))
+            .unwrap();
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("source", "hash-source"))
+            .unwrap();
+
+        let error =
+            super::update_text_item_impl(&state, item.id, "duplicate".to_string()).unwrap_err();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(error.to_string().contains("already exists"));
+        assert_eq!(stored.content.as_deref(), Some("source"));
+        assert_eq!(stored.content_hash, "hash-source");
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_create_text_item_rejects_sensitive_content() {
+        let state = super::AppState::new(repo());
+
+        let error =
+            super::create_text_item_impl(&state, "password=secret123".to_string()).unwrap_err();
+
+        assert!(error.to_string().contains("sensitive"));
+        assert_eq!(state.repository().count_items().unwrap(), 0);
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_update_text_item_rejects_too_large_content() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("source", "hash-source"))
+            .unwrap();
+        let content = "x".repeat(100 * 1024 + 1);
+
+        let error = super::update_text_item_impl(&state, item.id, content).unwrap_err();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(error.to_string().contains("too large"));
+        assert_eq!(stored.content.as_deref(), Some("source"));
+        assert_eq!(stored.content_hash, "hash-source");
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_create_text_item_rejects_file_path_content() {
+        let state = super::AppState::new(repo());
+
+        let error = super::create_text_item_impl(&state, r"C:\Users\xxsby\clip.txt".to_string())
+            .unwrap_err();
+
+        assert!(error.to_string().contains("file content"));
+        assert_eq!(state.repository().count_items().unwrap(), 0);
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_update_text_item_rejects_file_path_content() {
+        let state = super::AppState::new(repo());
+        let item = state
+            .repository()
+            .insert_clipboard_item(text_input("source", "hash-source"))
+            .unwrap();
+
+        let error =
+            super::update_text_item_impl(&state, item.id, r"C:\Users\xxsby\clip.txt".to_string())
+                .unwrap_err();
+        let stored = state.repository().get_item_by_id(item.id).unwrap().unwrap();
+
+        assert!(error.to_string().contains("file content"));
+        assert_eq!(stored.content.as_deref(), Some("source"));
+        assert_eq!(stored.content_hash, "hash-source");
+        assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_create_text_item_trims_detects_and_bumps_revision() {
+        let state = super::AppState::new(repo());
+        let expected_hash = content_hash(ClipboardContentType::Email, "xxsby@example.com");
+
+        let created =
+            super::create_text_item_impl(&state, " xxsby@example.com ".to_string()).unwrap();
+
+        assert_eq!(created.content.as_deref(), Some("xxsby@example.com"));
+        assert_eq!(created.content_type, ClipboardContentType::Email);
+        assert_eq!(created.preview, "xxsby@example.com");
+        assert_eq!(created.content_hash, expected_hash);
+        assert_eq!(state.history_revision(), 1);
     }
 
     #[test]

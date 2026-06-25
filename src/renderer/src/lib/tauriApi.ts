@@ -9,7 +9,9 @@ import type {
   FixedContentInput,
   HotkeySettings,
   HudPayload,
-  MonitoringStatus
+  MonitoringStatus,
+  QuickPasteCursorPayload,
+  SpecialPasteAction
 } from '@shared/types';
 
 type CommandResult = { success: boolean; error?: string };
@@ -127,6 +129,23 @@ export const clipboardApi: ClipboardApi = {
       return { success: false, error: errorMessage(error) };
     }
   },
+  async specialPasteItem(id: number, action: SpecialPasteAction) {
+    try {
+      const result = await invoke<PasteResult>('special_paste_item', { id, action });
+      if (result.success) {
+        return { success: true, item: result.item ?? undefined };
+      }
+      return { success: false, error: result.message || 'special paste failed' };
+    } catch (error) {
+      return { success: false, error: errorMessage(error) };
+    }
+  },
+  updateTextItem(id, content) {
+    return invoke<ClipboardItem>('update_text_item', { id, content });
+  },
+  createTextItem(content) {
+    return invoke<ClipboardItem>('create_text_item', { content });
+  },
   async copyItem(id) {
     try {
       const result = await invoke<PasteResult>('copy_item', { id });
@@ -229,6 +248,9 @@ export const clipboardApi: ClipboardApi = {
   },
   onNewItem(handler) {
     return listenPayload<ClipboardItem>('clipboard:new-item', handler);
+  },
+  onQuickPasteCursor(handler) {
+    return listenPayload<QuickPasteCursorPayload>('quick-paste:cursor', handler);
   },
   onFocusSearch(handler) {
     return listenPayload<void>('clipboard:focus-search', handler);

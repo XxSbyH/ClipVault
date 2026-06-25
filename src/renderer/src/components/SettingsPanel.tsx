@@ -29,9 +29,16 @@ import { useClipboardStore } from '@/store/clipboardStore';
 
 type SettingsTab = 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about';
 
+interface FixedContentPrefill {
+  title: string;
+  content: string;
+  nonce: number;
+}
+
 interface SettingsPanelProps {
   open: boolean;
   initialTab?: SettingsTab;
+  prefillFixedContent?: FixedContentPrefill | null;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -65,6 +72,11 @@ const HOTKEY_CONFLICT_LABELS: Record<string, string> = {
 
 const NORMAL_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['openPanel', 'search', 'pause', 'clear'];
 const QUICK_PASTE_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['quickPastePrev', 'quickPasteNext'];
+const FIXED_CONTENT_EXAMPLES = [
+  { title: '常用回复', content: '收到，我稍后处理。' },
+  { title: '邮件签名', content: '谢谢，祝好。' },
+  { title: '日期占位', content: '今天需要同步的事项：' }
+];
 const MODIFIER_KEYS = ['Ctrl', 'Alt', 'Shift', 'Meta'] as const;
 type ModifierKey = (typeof MODIFIER_KEYS)[number];
 
@@ -272,7 +284,12 @@ function findFixedContentHotkeyConflict(
   return null;
 }
 
-export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: SettingsPanelProps): JSX.Element {
+export function SettingsPanel({
+  open,
+  initialTab = 'general',
+  prefillFixedContent = null,
+  onOpenChange
+}: SettingsPanelProps): JSX.Element {
   const settings = useClipboardStore((state) => state.settings);
   const setSettings = useClipboardStore((state) => state.setSettings);
   const setItems = useClipboardStore((state) => state.setItems);
@@ -309,6 +326,26 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
   const hotkeyRecordSeqRef = useRef(0);
   const fixedContentHotkeyRecordSeqRef = useRef(0);
   const openRef = useRef(open);
+
+  function openPrefilledFixedContentForm(title: string, content: string) {
+    hotkeyRecordSeqRef.current += 1;
+    setEditingHotkey(null);
+    setRecordingPreview('');
+    pressedKeysRef.current.clear();
+    candidateComboRef.current = '';
+    fixedContentHotkeyRecordSeqRef.current += 1;
+    setRecordingFixedContentHotkey(false);
+    setFixedContentRecordingPreview('');
+    fixedContentPressedKeysRef.current.clear();
+    fixedContentCandidateComboRef.current = '';
+    setEditingFixedContent(null);
+    setFixedContentTitle(title);
+    setFixedContentValue(content);
+    setFixedContentHotkey('');
+    setFixedContentEnabled(true);
+    setShowFixedContentForm(true);
+    setErrorMessage('');
+  }
 
   useEffect(() => {
     openRef.current = open;
@@ -379,6 +416,14 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
       cancelled = true;
     };
   }, [open, initialTab, setSettings]);
+
+  useEffect(() => {
+    if (!open || !prefillFixedContent) {
+      return;
+    }
+    setActiveTab('hotkeys');
+    openPrefilledFixedContentForm(prefillFixedContent.title, prefillFixedContent.content);
+  }, [open, prefillFixedContent?.nonce]);
 
   useEffect(() => {
     if (!open || activeTab !== 'hotkeys') {
@@ -558,23 +603,7 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
   };
 
   const openNewFixedContentForm = () => {
-    hotkeyRecordSeqRef.current += 1;
-    setEditingHotkey(null);
-    setRecordingPreview('');
-    pressedKeysRef.current.clear();
-    candidateComboRef.current = '';
-    fixedContentHotkeyRecordSeqRef.current += 1;
-    setRecordingFixedContentHotkey(false);
-    setFixedContentRecordingPreview('');
-    fixedContentPressedKeysRef.current.clear();
-    fixedContentCandidateComboRef.current = '';
-    setEditingFixedContent(null);
-    setFixedContentTitle('');
-    setFixedContentValue('');
-    setFixedContentHotkey('');
-    setFixedContentEnabled(true);
-    setShowFixedContentForm(true);
-    setErrorMessage('');
+    openPrefilledFixedContentForm('', '');
   };
 
   const openEditFixedContentForm = (content: FixedContent) => {
@@ -1243,6 +1272,35 @@ export function SettingsPanel({ open, initialTab = 'general', onOpenChange }: Se
                 >
                   新增固定内容
                 </Button>
+              </div>
+
+              <div className="rounded-[1.1rem] border border-teal-100 bg-teal-50/45 p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">试用示例</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {FIXED_CONTENT_EXAMPLES.map((example) => (
+                    <div
+                      key={example.title}
+                      className="flex min-h-[116px] flex-col justify-between rounded-lg border border-teal-100 bg-white px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">{example.title}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{example.content}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 w-full border-teal-100 bg-white text-teal-800 hover:bg-teal-50"
+                        aria-label={`使用示例 ${example.title}`}
+                        onClick={() => openPrefilledFixedContentForm(example.title, example.content)}
+                      >
+                        使用示例
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {fixedContents.length > 0 ? (

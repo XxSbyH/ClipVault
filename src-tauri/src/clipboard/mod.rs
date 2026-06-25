@@ -84,10 +84,25 @@ pub fn capture_clipboard_now(app: &AppHandle, state: &AppState) -> AppResult<()>
 }
 
 pub fn remember_internal_clipboard_write(state: &AppState, item: &ClipboardItem) {
+    remember_internal_clipboard_hash(state, &item.content_hash);
+}
+
+pub fn remember_internal_text_clipboard_write(state: &AppState, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+
+    let content_type = detect_content_type(text);
+    let hash = hash_text(content_type, text);
+    remember_internal_clipboard_hash(state, &hash);
+}
+
+pub fn remember_internal_clipboard_hash(state: &AppState, hash: &str) {
     state.clipboard_monitor_mut(|monitor| {
-        monitor.remember_hash(item.content_hash.clone());
+        monitor.remember_hash(hash.to_string());
     });
-    state.set_monitoring_last_hash(&item.content_hash);
+    state.set_monitoring_last_hash(hash);
 }
 
 fn tick_with_shared_monitor(app: &AppHandle, state: &AppState) -> AppResult<()> {

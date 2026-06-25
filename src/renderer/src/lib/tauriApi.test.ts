@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BlacklistApp, ClipboardItem, FixedContent, FixedContentInput } from '@shared/types';
+import type {
+  BlacklistApp,
+  ClipboardItem,
+  FixedContent,
+  FixedContentInput,
+  QuickPasteCursorPayload
+} from '@shared/types';
 
 const { invokeMock, listenMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -57,6 +63,28 @@ describe('clipboardApi Tauri adapter', () => {
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
+  it('listens for quick paste cursor events', async () => {
+    const payload: QuickPasteCursorPayload = {
+      selectedItemId: 7,
+      boundary: null
+    };
+    const unlisten = vi.fn();
+    const handler = vi.fn();
+    listenMock.mockImplementationOnce(async (_eventName, callback) => {
+      callback({ payload });
+      return unlisten;
+    });
+    const { clipboardApi } = await import('./tauriApi');
+
+    const off = clipboardApi.onQuickPasteCursor(handler);
+    await Promise.resolve();
+    off();
+
+    expect(listenMock).toHaveBeenCalledWith('quick-paste:cursor', expect.any(Function));
+    expect(handler).toHaveBeenCalledWith(payload);
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
   it('maps delete_item success and rejected invoke to old result shape', async () => {
     const { clipboardApi } = await import('./tauriApi');
     invokeMock.mockResolvedValueOnce(2);
@@ -102,6 +130,26 @@ describe('clipboardApi Tauri adapter', () => {
       item
     });
     expect(invokeMock).toHaveBeenCalledWith('copy_item', { id: 9 });
+  });
+
+  it('maps special paste and text item commands', async () => {
+    const { clipboardApi } = await import('./tauriApi');
+    const item = makeItem(12);
+    invokeMock.mockResolvedValueOnce({ success: true, message: 'pasted', item, revision: 3 });
+
+    await expect(clipboardApi.specialPasteItem(12, 'upper')).resolves.toEqual({
+      success: true,
+      item
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith('special_paste_item', { id: 12, action: 'upper' });
+
+    invokeMock.mockResolvedValueOnce(item);
+    await expect(clipboardApi.updateTextItem(12, 'updated')).resolves.toEqual(item);
+    expect(invokeMock).toHaveBeenLastCalledWith('update_text_item', { id: 12, content: 'updated' });
+
+    invokeMock.mockResolvedValueOnce(item);
+    await expect(clipboardApi.createTextItem('new text')).resolves.toEqual(item);
+    expect(invokeMock).toHaveBeenLastCalledWith('create_text_item', { content: 'new text' });
   });
 
   it('maps clear_history returned deleted count to old result shape', async () => {

@@ -5,3 +5,4 @@ pub const CLIPBOARD_OPEN_HOTKEYS: &str = "clipboard:open-hotkeys";
 pub const HUD_SHOW: &str = "hud:show";
 pub const HISTORY_REVISION: &str = "history:revision";
 pub const MONITORING_CHANGED: &str = "monitoring:changed";
+pub const QUICK_PASTE_CURSOR_CHANGED: &str = "quick-paste:cursor";

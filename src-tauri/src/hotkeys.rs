@@ -12,7 +12,7 @@ use crate::{
     events,
     models::{
         AppSettings, ClipboardItem, FixedContent, HotkeySettings, HudDirection, HudPayload,
-        WheelShortcutModifier, WheelShortcutScope,
+        QuickPasteBoundary, QuickPasteCursorPayload, WheelShortcutModifier, WheelShortcutScope,
     },
     paste, windows,
 };
@@ -39,7 +39,11 @@ pub struct QuickPasteCursor {
 }
 
 impl QuickPasteCursor {
-    pub fn resolve(&mut self, direction: QuickPasteDirection, history_ids: &[i64]) -> Option<i64> {
+    pub fn resolve(
+        &mut self,
+        direction: QuickPasteDirection,
+        history_ids: &[i64],
+    ) -> QuickPasteCursorResolution {
         self.resolve_at(direction, history_ids, Instant::now())
     }
 
@@ -48,26 +52,41 @@ impl QuickPasteCursor {
         direction: QuickPasteDirection,
         history_ids: &[i64],
         now: Instant,
-    ) -> Option<i64> {
+    ) -> QuickPasteCursorResolution {
         if history_ids.is_empty() {
             *self = Self::default();
-            return None;
+            return QuickPasteCursorResolution::Empty;
         }
 
+        let selected_item_id = self.selected_item_id();
         self.retain_existing_ids(history_ids);
         if self.should_start_new_session(now) {
             self.start_session(history_ids);
+        } else {
+            self.merge_new_ids(history_ids, selected_item_id);
         }
 
         let current = self.offset.unwrap_or(0).min(self.order.len() - 1);
         let next = match direction {
-            QuickPasteDirection::Older => (current + 1).min(self.order.len() - 1),
-            QuickPasteDirection::Newer => current.saturating_sub(1),
+            QuickPasteDirection::Older if current + 1 >= self.order.len() => {
+                self.last_used_at = Some(now);
+                return QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Oldest);
+            }
+            QuickPasteDirection::Older => current + 1,
+            QuickPasteDirection::Newer if current == 0 => {
+                self.last_used_at = Some(now);
+                return QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Newest);
+            }
+            QuickPasteDirection::Newer => current - 1,
         };
 
         self.offset = Some(next);
         self.last_used_at = Some(now);
-        self.order.get(next).copied()
+        self.order
+            .get(next)
+            .copied()
+            .map(QuickPasteCursorResolution::Item)
+            .unwrap_or(QuickPasteCursorResolution::Empty)
     }
 
     fn should_start_new_session(&self, now: Instant) -> bool {
@@ -102,18 +121,67 @@ impl QuickPasteCursor {
         }
     }
 
+    fn merge_new_ids(&mut self, history_ids: &[i64], selected_item_id: Option<i64>) {
+        for (index, id) in history_ids.iter().enumerate() {
+            if self.order.contains(id) {
+                continue;
+            }
+            let insert_at = history_ids[index + 1..]
+                .iter()
+                .find_map(|next_id| self.order.iter().position(|current| current == next_id))
+                .unwrap_or(self.order.len());
+            self.order.insert(insert_at, *id);
+        }
+
+        if let Some(selected_index) =
+            selected_item_id.and_then(|id| self.order.iter().position(|current| *current == id))
+        {
+            self.offset = Some(selected_index);
+        } else if self.offset.is_some_and(|offset| offset >= self.order.len()) {
+            self.offset = Some(self.order.len() - 1);
+        }
+        self.head_id = history_ids.first().copied();
+    }
+
+    fn selected_item_id(&self) -> Option<i64> {
+        self.offset
+            .and_then(|offset| self.order.get(offset))
+            .copied()
+    }
+
     pub fn snapshot(&self) -> QuickPasteCursorSnapshot {
         QuickPasteCursorSnapshot {
             offset: self.offset.map(|offset| offset as i64),
             head_id: self.head_id,
+            selected_item_id: self.selected_item_id(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickPasteCursorResolution {
+    Item(i64),
+    Boundary(QuickPasteBoundary),
+    Empty,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QuickPasteCursorSnapshot {
     pub offset: Option<i64>,
     pub head_id: Option<i64>,
+    pub selected_item_id: Option<i64>,
+}
+
+enum QuickHistoryCopyResult {
+    Copied(Box<commands::PasteResult>),
+    Boundary(QuickPasteBoundary),
+    Empty,
+}
+
+enum QuickHistoryResolveResult {
+    Item(Box<ClipboardItem>),
+    Boundary(QuickPasteBoundary),
+    Empty,
 }
 
 pub fn head_id(items: &[ClipboardItem]) -> Option<i64> {
@@ -424,39 +492,51 @@ fn paste_fixed_content(app: &AppHandle, id: i64) -> AppResult<()> {
 fn resolve_quick_history_item(
     state: &AppState,
     direction: QuickPasteDirection,
-) -> AppResult<Option<ClipboardItem>> {
+) -> AppResult<QuickHistoryResolveResult> {
     let total = state.repository().count_items()?;
     let history = state.repository().get_history(total)?;
     let history_ids = history.iter().map(|item| item.id).collect::<Vec<_>>();
-    let Some(item_id) =
-        state.quick_paste_cursor_mut(|cursor| cursor.resolve(direction, &history_ids))
-    else {
-        return Ok(None);
-    };
+    let item_id =
+        match state.quick_paste_cursor_mut(|cursor| cursor.resolve(direction, &history_ids)) {
+            QuickPasteCursorResolution::Item(item_id) => item_id,
+            QuickPasteCursorResolution::Boundary(boundary) => {
+                return Ok(QuickHistoryResolveResult::Boundary(boundary));
+            }
+            QuickPasteCursorResolution::Empty => return Ok(QuickHistoryResolveResult::Empty),
+        };
 
-    Ok(history.into_iter().find(|item| item.id == item_id))
+    Ok(history
+        .into_iter()
+        .find(|item| item.id == item_id)
+        .map(|item| QuickHistoryResolveResult::Item(Box::new(item)))
+        .unwrap_or(QuickHistoryResolveResult::Empty))
 }
 
 fn copy_quick_history_item<F>(
     state: &AppState,
     direction: QuickPasteDirection,
     copy: F,
-) -> AppResult<Option<commands::PasteResult>>
+) -> AppResult<QuickHistoryCopyResult>
 where
     F: FnOnce(&ClipboardItem) -> AppResult<()>,
 {
-    let Some(item) = resolve_quick_history_item(state, direction)? else {
-        return Ok(None);
+    let item = match resolve_quick_history_item(state, direction)? {
+        QuickHistoryResolveResult::Item(item) => item,
+        QuickHistoryResolveResult::Boundary(boundary) => {
+            return Ok(QuickHistoryCopyResult::Boundary(boundary));
+        }
+        QuickHistoryResolveResult::Empty => return Ok(QuickHistoryCopyResult::Empty),
     };
 
-    commands::copy_item_impl(state, item.id, copy).map(Some)
+    commands::copy_item_impl(state, item.id, copy)
+        .map(|result| QuickHistoryCopyResult::Copied(Box::new(result)))
 }
 
 fn wheel_quick_history_item<F>(
     state: &AppState,
     direction: QuickPasteDirection,
     copy: F,
-) -> AppResult<Option<commands::PasteResult>>
+) -> AppResult<QuickHistoryCopyResult>
 where
     F: FnOnce(&ClipboardItem) -> AppResult<()>,
 {
@@ -483,28 +563,61 @@ fn quick_copy_success_payload(
 
 fn quick_copy(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()> {
     let state = app.state::<AppState>();
-    let Some(result) = wheel_quick_history_item(state.inner(), direction, |item| {
+    let outcome = wheel_quick_history_item(state.inner(), direction, |item| {
         paste::write_item_to_clipboard(app, item)
-    })?
-    else {
-        return Ok(());
-    };
+    })?;
 
-    if let Some(payload) = quick_copy_success_payload(direction, &result) {
-        commands::emit_hud_notification(app, payload);
-    } else if !result.success {
-        tracing::warn!(target: "hotkeys", "quick copy failed: {}", result.message);
-    }
+    match outcome {
+        QuickHistoryCopyResult::Copied(result) => {
+            if let Some(payload) = quick_copy_success_payload(direction, &result) {
+                commands::emit_hud_notification(app, payload);
+                emit_quick_paste_cursor(app, result.item.as_ref().map(|item| item.id), None);
+            } else if !result.success {
+                tracing::warn!(target: "hotkeys", "quick copy failed: {}", result.message);
+            }
 
-    if result.success {
-        let _ = app.emit(
-            events::HISTORY_REVISION,
-            commands::HistoryRevisionPayload {
-                revision: result.revision,
-            },
-        );
+            if result.success {
+                let _ = app.emit(
+                    events::HISTORY_REVISION,
+                    commands::HistoryRevisionPayload {
+                        revision: result.revision,
+                    },
+                );
+            }
+        }
+        QuickHistoryCopyResult::Boundary(boundary) => {
+            commands::emit_hud_notification(app, quick_copy_boundary_payload(boundary));
+            emit_quick_paste_cursor(
+                app,
+                state.quick_paste_cursor().selected_item_id,
+                Some(boundary),
+            );
+        }
+        QuickHistoryCopyResult::Empty => {}
     }
     Ok(())
+}
+
+fn quick_copy_boundary_payload(boundary: QuickPasteBoundary) -> HudPayload {
+    let text = match boundary {
+        QuickPasteBoundary::Newest => "游标已到开始",
+        QuickPasteBoundary::Oldest => "游标已到末尾",
+    };
+    HudPayload::panel("快速粘贴", text)
+}
+
+fn emit_quick_paste_cursor(
+    app: &AppHandle,
+    selected_item_id: Option<i64>,
+    boundary: Option<QuickPasteBoundary>,
+) {
+    let _ = app.emit(
+        events::QUICK_PASTE_CURSOR_CHANGED,
+        QuickPasteCursorPayload {
+            selected_item_id,
+            boundary,
+        },
+    );
 }
 
 fn wheel_direction_from_mouse_data(mouse_data: u32) -> Option<QuickPasteDirection> {
@@ -998,6 +1111,16 @@ mod tests {
         }
     }
 
+    fn copied_result(outcome: QuickHistoryCopyResult) -> commands::PasteResult {
+        match outcome {
+            QuickHistoryCopyResult::Copied(result) => *result,
+            QuickHistoryCopyResult::Boundary(boundary) => {
+                panic!("expected copied result, got boundary {boundary:?}")
+            }
+            QuickHistoryCopyResult::Empty => panic!("expected copied result, got empty history"),
+        }
+    }
+
     #[test]
     fn quick_history_action_uses_copy_result_and_updates_cursor() {
         let state = AppState::new(repo());
@@ -1015,7 +1138,7 @@ mod tests {
             copied_id = Some(item.id);
             Ok(())
         })
-        .unwrap()
+        .map(copied_result)
         .unwrap();
 
         assert_eq!(copied_id, Some(older.id));
@@ -1027,6 +1150,7 @@ mod tests {
             QuickPasteCursorSnapshot {
                 offset: Some(1),
                 head_id: Some(newest.id),
+                selected_item_id: Some(older.id),
             }
         );
     }
@@ -1046,7 +1170,7 @@ mod tests {
         let result = copy_quick_history_item(&state, QuickPasteDirection::Older, |_| {
             Err(AppError::from("copy failed"))
         })
-        .unwrap()
+        .map(copied_result)
         .unwrap();
         let stored = state
             .repository()
@@ -1073,7 +1197,7 @@ mod tests {
             .unwrap();
 
         let result = copy_quick_history_item(&state, QuickPasteDirection::Older, |_| Ok(()))
-            .unwrap()
+            .map(copied_result)
             .unwrap();
         let payload = quick_copy_success_payload(QuickPasteDirection::Older, &result).unwrap();
 
@@ -1099,7 +1223,7 @@ mod tests {
         let failed = copy_quick_history_item(&failed_state, QuickPasteDirection::Older, |_| {
             Err(AppError::from("copy failed"))
         })
-        .unwrap()
+        .map(copied_result)
         .unwrap();
 
         assert!(failed.item.is_some());
@@ -1126,7 +1250,7 @@ mod tests {
             copied_id = Some(item.id);
             Ok(())
         })
-        .unwrap()
+        .map(copied_result)
         .unwrap();
         let stored = state
             .repository()
@@ -1163,7 +1287,7 @@ mod tests {
             copied_ids.push(item.id);
             Ok(())
         })
-        .unwrap()
+        .map(copied_result)
         .unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(2));
@@ -1176,7 +1300,7 @@ mod tests {
             copied_ids.push(item.id);
             Ok(())
         })
-        .unwrap()
+        .map(copied_result)
         .unwrap();
 
         assert_eq!(copied_ids, vec![middle.id, oldest.id]);
@@ -1188,42 +1312,43 @@ mod tests {
 
         assert_eq!(
             cursor.resolve(QuickPasteDirection::Older, &[10, 9, 8]),
-            Some(9)
+            QuickPasteCursorResolution::Item(9)
         );
         assert_eq!(
             cursor.snapshot(),
             QuickPasteCursorSnapshot {
                 offset: Some(1),
                 head_id: Some(10),
+                selected_item_id: Some(9),
             }
         );
     }
 
     #[test]
-    fn newer_move_clamps_at_offset_zero() {
+    fn newer_move_reports_boundary_at_offset_zero() {
         let mut cursor = QuickPasteCursor::default();
 
         assert_eq!(
             cursor.resolve(QuickPasteDirection::Newer, &[10, 9, 8]),
-            Some(10)
+            QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Newest)
         );
         assert_eq!(
             cursor.resolve(QuickPasteDirection::Newer, &[10, 9, 8]),
-            Some(10)
+            QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Newest)
         );
     }
 
     #[test]
-    fn older_move_clamps_at_tail() {
+    fn older_move_reports_boundary_at_tail() {
         let mut cursor = QuickPasteCursor::default();
 
         assert_eq!(
             cursor.resolve(QuickPasteDirection::Older, &[10, 9]),
-            Some(9)
+            QuickPasteCursorResolution::Item(9)
         );
         assert_eq!(
             cursor.resolve(QuickPasteDirection::Older, &[10, 9]),
-            Some(9)
+            QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Oldest)
         );
     }
 
@@ -1233,7 +1358,7 @@ mod tests {
         let now = Instant::now();
         assert_eq!(
             cursor.resolve_at(QuickPasteDirection::Older, &[10, 9, 8, 7], now),
-            Some(9)
+            QuickPasteCursorResolution::Item(9)
         );
 
         assert_eq!(
@@ -1242,7 +1367,7 @@ mod tests {
                 &[9, 10, 8, 7],
                 now + Duration::from_secs(1)
             ),
-            Some(8)
+            QuickPasteCursorResolution::Item(8)
         );
         assert_eq!(
             cursor.resolve_at(
@@ -1250,13 +1375,14 @@ mod tests {
                 &[9, 10, 8, 7],
                 now + QUICK_PASTE_CURSOR_IDLE_RESET + Duration::from_secs(1)
             ),
-            Some(10)
+            QuickPasteCursorResolution::Item(10)
         );
         assert_eq!(
             cursor.snapshot(),
             QuickPasteCursorSnapshot {
                 offset: Some(1),
                 head_id: Some(9),
+                selected_item_id: Some(10),
             }
         );
     }
@@ -1266,11 +1392,84 @@ mod tests {
         let mut cursor = QuickPasteCursor::default();
         assert_eq!(
             cursor.resolve(QuickPasteDirection::Older, &[10, 9, 8]),
-            Some(9)
+            QuickPasteCursorResolution::Item(9)
         );
 
-        assert_eq!(cursor.resolve(QuickPasteDirection::Older, &[]), None);
+        assert_eq!(
+            cursor.resolve(QuickPasteDirection::Older, &[]),
+            QuickPasteCursorResolution::Empty
+        );
         assert_eq!(cursor.snapshot(), QuickPasteCursorSnapshot::default());
+    }
+
+    #[test]
+    fn active_session_includes_new_items_inserted_before_head() {
+        let mut cursor = QuickPasteCursor::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            cursor.resolve_at(QuickPasteDirection::Older, &[10, 9, 8], now),
+            QuickPasteCursorResolution::Item(9)
+        );
+        assert_eq!(
+            cursor.resolve_at(
+                QuickPasteDirection::Older,
+                &[10, 9, 8],
+                now + Duration::from_secs(1)
+            ),
+            QuickPasteCursorResolution::Item(8)
+        );
+        assert_eq!(
+            cursor.resolve_at(
+                QuickPasteDirection::Newer,
+                &[11, 10, 9, 8],
+                now + Duration::from_secs(2)
+            ),
+            QuickPasteCursorResolution::Item(9)
+        );
+        assert_eq!(
+            cursor.resolve_at(
+                QuickPasteDirection::Newer,
+                &[11, 10, 9, 8],
+                now + Duration::from_secs(3)
+            ),
+            QuickPasteCursorResolution::Item(10)
+        );
+        assert_eq!(
+            cursor.resolve_at(
+                QuickPasteDirection::Newer,
+                &[11, 10, 9, 8],
+                now + Duration::from_secs(4)
+            ),
+            QuickPasteCursorResolution::Item(11)
+        );
+    }
+
+    #[test]
+    fn cursor_reports_boundary_instead_of_reselecting_current_item() {
+        let mut cursor = QuickPasteCursor::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            cursor.resolve_at(QuickPasteDirection::Newer, &[10, 9], now),
+            QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Newest)
+        );
+        assert_eq!(
+            cursor.resolve_at(
+                QuickPasteDirection::Older,
+                &[10, 9],
+                now + Duration::from_secs(1)
+            ),
+            QuickPasteCursorResolution::Item(9)
+        );
+        assert_eq!(
+            cursor.resolve_at(
+                QuickPasteDirection::Older,
+                &[10, 9],
+                now + Duration::from_secs(2)
+            ),
+            QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Oldest)
+        );
     }
 
     #[test]

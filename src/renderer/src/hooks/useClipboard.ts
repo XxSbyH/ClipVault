@@ -7,10 +7,14 @@ export function useClipboardData(): void {
   const setItems = useClipboardStore((state) => state.setItems);
   const upsertItem = useClipboardStore((state) => state.upsertItem);
   const setSettings = useClipboardStore((state) => state.setSettings);
+  const setSelectedItemId = useClipboardStore((state) => state.setSelectedItemId);
 
   useEffect(() => {
     const offNewItem = clipboardApi.onNewItem((item) => {
       upsertItem(item);
+    });
+    const offQuickPasteCursor = clipboardApi.onQuickPasteCursor((payload) => {
+      setSelectedItemId(payload.selectedItemId);
     });
 
     // 先完成事件订阅，再通知主进程渲染层已就绪，避免启动阶段丢事件。
@@ -49,7 +53,8 @@ export function useClipboardData(): void {
 
     return () => {
       offNewItem();
+      offQuickPasteCursor();
       window.clearInterval(timer);
     };
-  }, [setItems, setSettings, upsertItem]);
+  }, [setItems, setSelectedItemId, setSettings, upsertItem]);
 }

@@ -9,6 +9,7 @@ import { useThemeMode } from '@/hooks/useThemeMode';
 import { clipboardApi } from '@/lib/tauriApi';
 
 type SettingsTab = 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about';
+type FixedContentPrefill = { title: string; content: string; nonce: number };
 
 export default function App(): JSX.Element {
   useClipboardData();
@@ -17,6 +18,7 @@ export default function App(): JSX.Element {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
+  const [fixedContentPrefill, setFixedContentPrefill] = useState<FixedContentPrefill | null>(null);
   const [monitoring, setMonitoring] = useState(true);
 
   useEffect(() => {
@@ -46,12 +48,22 @@ export default function App(): JSX.Element {
           setSettingsOpen(true);
         }}
       >
-        <ClipboardList />
+        <ClipboardList
+          onAddFixedContent={(prefill) => {
+            setFixedContentPrefill((current) => ({
+              ...prefill,
+              nonce: (current?.nonce ?? 0) + 1
+            }));
+            setSettingsTab('hotkeys');
+            setSettingsOpen(true);
+          }}
+        />
       </CommandPanelShell>
 
       <SettingsPanel
         open={settingsOpen}
         initialTab={settingsTab}
+        prefillFixedContent={fixedContentPrefill}
         onOpenChange={setSettingsOpen}
       />
     </ErrorBoundary>

@@ -14,6 +14,20 @@ pub enum ClipboardContentType {
     Email,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpecialPasteAction {
+    Upper,
+    Lower,
+    Plain,
+    Camel,
+    Capitalize,
+    Sentence,
+    RemoveNewlines,
+    AppendNewline,
+    AppendCurrentTime,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardMetadata {
@@ -235,6 +249,20 @@ pub struct BlacklistApp {
 pub enum HudDirection {
     Prev,
     Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuickPasteBoundary {
+    Newest,
+    Oldest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickPasteCursorPayload {
+    pub selected_item_id: Option<i64>,
+    pub boundary: Option<QuickPasteBoundary>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

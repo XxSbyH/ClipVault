@@ -12,6 +12,7 @@ pub mod models;
 pub mod paste;
 pub mod privacy;
 pub mod settings;
+pub mod text_transform;
 pub mod tray;
 pub mod windows;
 
@@ -62,6 +63,9 @@ pub fn run() {
             commands::search_items,
             commands::paste_item,
             commands::copy_item,
+            commands::special_paste_item,
+            commands::update_text_item,
+            commands::create_text_item,
             commands::delete_item,
             commands::toggle_pin,
             commands::toggle_favorite,

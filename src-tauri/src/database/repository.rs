@@ -13,8 +13,8 @@ use crate::{
     errors::AppResult,
     models::{
         AppSettings, BlacklistApp, ClipboardContentType, ClipboardInsertInput, ClipboardItem,
-        FixedContent, FixedContentInput, HotkeySettings, HotkeySettingsPatch, ImageCompression,
-        ThemeMode, WheelShortcutModifier, WheelShortcutScope,
+        ClipboardMetadata, FixedContent, FixedContentInput, HotkeySettings, HotkeySettingsPatch,
+        ImageCompression, ThemeMode, WheelShortcutModifier, WheelShortcutScope,
     },
 };
 
@@ -169,6 +169,54 @@ impl Repository {
             params![now_timestamp(), id],
         )?;
         self.get_item_locked(&conn, id)
+    }
+
+    pub fn update_text_item(
+        &self,
+        id: i64,
+        content: &str,
+        content_type: ClipboardContentType,
+        content_hash: &str,
+        preview: &str,
+        metadata: ClipboardMetadata,
+    ) -> AppResult<Option<ClipboardItem>> {
+        let conn = self.conn()?;
+        if let Some(existing) = self.get_item_by_hash_locked(&conn, content_hash)? {
+            if existing.id != id {
+                return Err(format!(
+                    "clipboard item with content hash already exists: {content_hash}"
+                )
+                .into());
+            }
+        }
+
+        let metadata = serde_json::to_string(&metadata)?;
+        let updated = conn.execute(
+            "UPDATE clipboard_items
+             SET content = ?1,
+                 content_type = ?2,
+                 content_hash = ?3,
+                 preview = ?4,
+                 metadata = ?5,
+                 file_path = NULL,
+                 image_data = NULL
+             WHERE id = ?6
+               AND content_type IN ('text', 'url', 'code', 'color', 'email')",
+            params![
+                content,
+                content_type_to_db(content_type),
+                content_hash,
+                preview,
+                metadata,
+                id,
+            ],
+        )?;
+
+        if updated == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(self.get_item_locked(&conn, id)?))
     }
 
     pub fn enforce_max_items(&self, max_items: i64) -> AppResult<()> {
@@ -836,8 +884,8 @@ mod tests {
     use serde_json::json;
 
     use crate::models::{
-        AppSettings, ClipboardContentType, ClipboardInsertInput, FixedContentInput,
-        HotkeySettingsPatch, ImageCompression, ThemeMode,
+        AppSettings, ClipboardContentType, ClipboardInsertInput, ClipboardMetadata,
+        FixedContentInput, HotkeySettingsPatch, ImageCompression, ThemeMode,
     };
 
     use super::Repository;
@@ -907,6 +955,39 @@ mod tests {
         );
         assert_eq!(repo.get_item_by_id(first.id).unwrap().unwrap().id, first.id);
         assert_eq!(repo.count_items().unwrap(), 1);
+    }
+
+    #[test]
+    fn update_text_item_clears_file_and_image_data_and_updates_search_index() {
+        let repo = repo();
+        let item = repo
+            .insert_clipboard_item(ClipboardInsertInput {
+                content: Some("old needle".to_string()),
+                content_type: ClipboardContentType::Text,
+                content_hash: "hash-old".to_string(),
+                preview: "old needle".to_string(),
+                metadata: None,
+                file_path: Some(r"C:\Users\xxsby\old.txt".to_string()),
+                image_data: Some(vec![1, 2, 3]),
+            })
+            .unwrap();
+
+        let updated = repo
+            .update_text_item(
+                item.id,
+                "new needle",
+                ClipboardContentType::Text,
+                "hash-new",
+                "new needle",
+                ClipboardMetadata::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let search_results = repo.search_items("new needle", 10).unwrap();
+
+        assert_eq!(updated.file_path, None);
+        assert_eq!(updated.image_data, None);
+        assert!(search_results.iter().any(|item| item.id == updated.id));
     }
 
     #[test]

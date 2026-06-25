@@ -20,11 +20,12 @@ import { cn } from '@/lib/utils';
 interface ClipboardItemProps {
   item: ClipboardItemType;
   selected: boolean;
-  onCopy: (id: number) => void;
+  onPaste: (id: number) => void;
   onTogglePin: (id: number) => void;
   onToggleFavorite: (id: number) => void;
   onDelete: (id: number) => void;
   onSelect: (id: number) => void;
+  onContextMenu: (item: ClipboardItemType, x: number, y: number) => void;
 }
 
 const TYPE_META: Record<
@@ -84,11 +85,12 @@ function formatFileSize(value: unknown): string | null {
 function ClipboardItemView({
   item,
   selected,
-  onCopy,
+  onPaste,
   onTogglePin,
   onToggleFavorite,
   onDelete,
-  onSelect
+  onSelect,
+  onContextMenu
 }: ClipboardItemProps): JSX.Element {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const typeMeta = TYPE_META[item.contentType];
@@ -180,10 +182,18 @@ function ClipboardItemView({
         role="button"
         tabIndex={0}
         aria-pressed={selected}
-        title="点击复制到剪贴板"
+        title="点击查看详情，双击粘贴"
         onClick={() => {
           onSelect(item.id);
-          onCopy(item.id);
+        }}
+        onDoubleClick={() => {
+          onSelect(item.id);
+          onPaste(item.id);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onSelect(item.id);
+          onContextMenu(item, event.clientX, event.clientY);
         }}
       >
         {item.contentType === 'image' ? (

@@ -5,21 +5,40 @@ import type { ClipboardItem } from '@shared/types';
 import { ClipboardList } from '@/components/ClipboardList';
 import { useClipboardStore } from '@/store/clipboardStore';
 
-const { copyItemMock, deleteItemMock, hideWindowMock, listPropsMock } = vi.hoisted(() => ({
+const {
+  copyItemMock,
+  createTextItemMock,
+  deleteItemMock,
+  hideWindowMock,
+  listPropsMock,
+  pasteItemMock,
+  scrollToItemMock,
+  specialPasteItemMock,
+  updateTextItemMock
+} = vi.hoisted(() => ({
   copyItemMock: vi.fn(),
+  createTextItemMock: vi.fn(),
   deleteItemMock: vi.fn(),
   hideWindowMock: vi.fn(),
-  listPropsMock: vi.fn()
+  listPropsMock: vi.fn(),
+  pasteItemMock: vi.fn(),
+  scrollToItemMock: vi.fn(),
+  specialPasteItemMock: vi.fn(),
+  updateTextItemMock: vi.fn()
 }));
 
 vi.mock('@/lib/tauriApi', () => ({
   clipboardApi: {
     getHistory: vi.fn().mockResolvedValue([]),
     copyItem: copyItemMock,
+    createTextItem: createTextItemMock,
     deleteItem: deleteItemMock,
     hideWindow: hideWindowMock,
+    pasteItem: pasteItemMock,
+    specialPasteItem: specialPasteItemMock,
     togglePin: vi.fn(),
-    toggleFavorite: vi.fn()
+    toggleFavorite: vi.fn(),
+    updateTextItem: updateTextItemMock
   }
 }));
 
@@ -42,7 +61,7 @@ vi.mock('react-window', async () => {
       },
       ref
     ) {
-      ReactModule.useImperativeHandle(ref, () => ({ scrollToItem: vi.fn() }));
+      ReactModule.useImperativeHandle(ref, () => ({ scrollToItem: scrollToItemMock }));
       listPropsMock({ height, itemCount, itemSize });
       return (
         <div data-testid="virtual-list">
@@ -102,6 +121,20 @@ describe('ClipboardList', () => {
     });
     deleteItemMock.mockResolvedValue({ success: true });
     hideWindowMock.mockResolvedValue(undefined);
+    pasteItemMock.mockResolvedValue({ success: true });
+    specialPasteItemMock.mockImplementation((id: number) => {
+      const item = useClipboardStore.getState().items.find((entry) => entry.id === id);
+      return Promise.resolve({
+        success: true,
+        item: item ? { ...item, useCount: item.useCount + 1 } : undefined
+      });
+    });
+    updateTextItemMock.mockImplementation((id: number, content: string) => {
+      const item = useClipboardStore.getState().items.find((entry) => entry.id === id);
+      return Promise.resolve(item ? { ...item, content, preview: content } : makeItem(id, content));
+    });
+    createTextItemMock.mockImplementation((content: string) => Promise.resolve(makeItem(99, content)));
+    scrollToItemMock.mockReset();
     useClipboardStore.setState({
       items: [],
       selectedType: 'all',
@@ -154,7 +187,7 @@ describe('ClipboardList', () => {
     expect(useClipboardStore.getState().selectedItemId).toBe(2);
   });
 
-  it('copies the selected item with Enter', async () => {
+  it('pastes the selected item with Enter and copies it with Ctrl+C', async () => {
     render(<ClipboardList />);
 
     await waitFor(() => {
@@ -163,72 +196,98 @@ describe('ClipboardList', () => {
     fireEvent.keyDown(window, { key: 'Enter' });
 
     await waitFor(() => {
+      expect(pasteItemMock).toHaveBeenCalledWith(3);
+    });
+
+    fireEvent.keyDown(window, { key: 'c', ctrlKey: true });
+
+    await waitFor(() => {
       expect(copyItemMock).toHaveBeenCalledWith(3);
     });
   });
 
-  it('copies a clicked history item without hiding the panel', async () => {
+  it('selects a clicked history item without copying it', async () => {
     render(<ClipboardList />);
 
     const row = screen.getByText('alpha').closest('[role="button"]');
     expect(row).toBeTruthy();
     fireEvent.click(row as HTMLElement);
 
-    await waitFor(() => {
-      expect(copyItemMock).toHaveBeenCalledWith(1);
-    });
+    expect(copyItemMock).not.toHaveBeenCalled();
     expect(hideWindowMock).not.toHaveBeenCalled();
     expect(useClipboardStore.getState().selectedItemId).toBe(1);
   });
 
-  it('keeps the latest clicked item selected when copy responses resolve out of order', async () => {
-    let resolveFirst!: (value: { success: boolean; item: ClipboardItem }) => void;
-    let resolveSecond!: (value: { success: boolean; item: ClipboardItem }) => void;
-    copyItemMock.mockReset();
-    copyItemMock
-      .mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveFirst = resolve;
-        })
-      )
-      .mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveSecond = resolve;
-        })
-      );
-
+  it('pastes a double-clicked history item', async () => {
     render(<ClipboardList />);
-    await waitFor(() => {
-      expect(useClipboardStore.getState().selectedItemId).toBe(3);
-    });
 
     const alpha = screen.getByText('alpha').closest('[role="button"]');
-    const bravo = screen.getByText('bravo').closest('[role="button"]');
     expect(alpha).toBeTruthy();
-    expect(bravo).toBeTruthy();
-
-    fireEvent.click(alpha as HTMLElement);
-    await waitFor(() => {
-      expect(copyItemMock).toHaveBeenCalledWith(1);
-    });
-
-    fireEvent.click(bravo as HTMLElement);
-    expect(useClipboardStore.getState().selectedItemId).toBe(2);
-    expect(copyItemMock).toHaveBeenCalledTimes(1);
-
-    resolveFirst({ success: true, item: makeItem(1, 'alpha', { useCount: 1 }) });
+    fireEvent.doubleClick(alpha as HTMLElement);
 
     await waitFor(() => {
-      expect(copyItemMock).toHaveBeenCalledWith(2);
-      expect(useClipboardStore.getState().selectedItemId).toBe(2);
+      expect(pasteItemMock).toHaveBeenCalledWith(1);
     });
+  });
 
-    resolveSecond({ success: true, item: makeItem(2, 'bravo', { isFavorite: true, useCount: 1 }) });
+  it('shows text special paste actions from the context menu', async () => {
+    render(<ClipboardList />);
+
+    const row = screen.getByText('alpha').closest('[role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.contextMenu(row as HTMLElement);
+    fireEvent.click(await screen.findByRole('menuitem', { name: '全部大写' }));
 
     await waitFor(() => {
-      expect(useClipboardStore.getState().selectedItemId).toBe(2);
-      expect(useClipboardStore.getState().items.find((item) => item.id === 2)?.useCount).toBe(1);
+      expect(specialPasteItemMock).toHaveBeenCalledWith(1, 'upper');
     });
+  });
+
+  it('opens the text workbench from the context menu and saves edits', async () => {
+    updateTextItemMock.mockResolvedValue(makeItem(1, 'edited text'));
+    render(<ClipboardList />);
+
+    const row = screen.getByText('alpha').closest('[role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.contextMenu(row as HTMLElement);
+    fireEvent.click(await screen.findByRole('menuitem', { name: '编辑内容' }));
+
+    const editor = await screen.findByLabelText('编辑结果');
+    fireEvent.change(editor, { target: { value: 'edited text' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存到当前历史' }));
+
+    await waitFor(() => {
+      expect(updateTextItemMock).toHaveBeenCalledWith(1, 'edited text');
+    });
+  });
+
+  it('applies text workbench transforms and saves as a new item', async () => {
+    createTextItemMock.mockResolvedValue(makeItem(9, 'HELLO'));
+    render(<ClipboardList />);
+
+    const row = screen.getByText('alpha').closest('[role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.contextMenu(row as HTMLElement);
+    fireEvent.click(await screen.findByRole('menuitem', { name: '编辑内容' }));
+    fireEvent.change(await screen.findByLabelText('编辑结果'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByRole('button', { name: '全部大写' }));
+    fireEvent.click(screen.getByRole('button', { name: '另存为新历史' }));
+
+    await waitFor(() => {
+      expect(createTextItemMock).toHaveBeenCalledWith('HELLO');
+    });
+  });
+
+  it('prefills fixed content from a history item through the context menu', async () => {
+    const addFixedContentMock = vi.fn();
+    render(<ClipboardList onAddFixedContent={addFixedContentMock} />);
+
+    const row = screen.getByText('alpha').closest('[role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.contextMenu(row as HTMLElement);
+    fireEvent.click(await screen.findByRole('menuitem', { name: '添加为固定内容' }));
+
+    expect(addFixedContentMock).toHaveBeenCalledWith({ title: 'alpha', content: 'alpha' });
   });
 
   it('deletes the selected item with Delete', async () => {
@@ -292,6 +351,20 @@ describe('ClipboardList', () => {
           itemSize: 78
         })
       );
+    });
+  });
+
+  it('scrolls to the item selected by quick paste cursor events', async () => {
+    render(<ClipboardList />);
+
+    await waitFor(() => {
+      expect(useClipboardStore.getState().selectedItemId).toBe(3);
+    });
+
+    useClipboardStore.getState().setSelectedItemId(1);
+
+    await waitFor(() => {
+      expect(scrollToItemMock).toHaveBeenCalledWith(2, 'smart');
     });
   });
 });
