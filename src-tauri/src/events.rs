@@ -1,5 +1,6 @@
 pub const CLIPBOARD_NEW_ITEM: &str = "clipboard:new-item";
 pub const CLIPBOARD_FOCUS_SEARCH: &str = "clipboard:focus-search";
+pub const QUICK_SEARCH_OPENED: &str = "quick-search:opened";
 pub const CLIPBOARD_OPEN_SETTINGS: &str = "clipboard:open-settings";
 pub const CLIPBOARD_OPEN_HOTKEYS: &str = "clipboard:open-hotkeys";
 pub const HUD_SHOW: &str = "hud:show";

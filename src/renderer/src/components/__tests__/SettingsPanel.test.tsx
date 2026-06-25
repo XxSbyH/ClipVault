@@ -58,7 +58,7 @@ vi.mock('@/lib/tauriApi', () => ({
 }));
 
 const defaultSettings: AppSettings = {
-  retentionDays: 7,
+  retentionDays: 0,
   maxItems: 10000,
   enableSensitiveFilter: true,
   enableBlacklist: true,
@@ -102,13 +102,13 @@ function makeFixedContent(
 }
 
 function renderPanel(
-  initialTab: 'general' | 'privacy' | 'hotkeys',
+  initialTab: 'general' | 'privacy' | 'hotkeys' | 'about',
   prefillFixedContent: { title: string; content: string; nonce: number } | null = null
 ) {
   return render(
     <SettingsPanel
       open
-      initialTab={initialTab as 'general'}
+      initialTab={initialTab}
       prefillFixedContent={prefillFixedContent}
       onOpenChange={vi.fn()}
     />
@@ -174,6 +174,24 @@ describe('SettingsPanel', () => {
 
     await waitFor(() => {
       expect(updateSettingMock).toHaveBeenCalledWith('themeMode', 'dark');
+    });
+  });
+
+  it('shows the current release version in the about settings', async () => {
+    renderPanel('about');
+
+    expect(await screen.findByText('ClipVault v2.1.4')).toBeInTheDocument();
+  });
+
+  it('defaults history retention to permanent and can switch back to a limited duration', async () => {
+    renderPanel('general');
+
+    await waitFor(() => expect(getSettingsMock).toHaveBeenCalled());
+    const retentionSelect = screen.getByDisplayValue('永久保留');
+    fireEvent.change(retentionSelect, { target: { value: '7' } });
+
+    await waitFor(() => {
+      expect(updateSettingMock).toHaveBeenCalledWith('retentionDays', 7);
     });
   });
 

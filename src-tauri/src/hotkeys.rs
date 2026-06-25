@@ -47,6 +47,14 @@ impl QuickPasteCursor {
         self.resolve_at(direction, history_ids, Instant::now())
     }
 
+    pub fn select(
+        &mut self,
+        item_id: i64,
+        history_ids: &[i64],
+    ) -> Option<QuickPasteCursorSnapshot> {
+        self.select_at(item_id, history_ids, Instant::now())
+    }
+
     fn resolve_at(
         &mut self,
         direction: QuickPasteDirection,
@@ -87,6 +95,20 @@ impl QuickPasteCursor {
             .copied()
             .map(QuickPasteCursorResolution::Item)
             .unwrap_or(QuickPasteCursorResolution::Empty)
+    }
+
+    fn select_at(
+        &mut self,
+        item_id: i64,
+        history_ids: &[i64],
+        now: Instant,
+    ) -> Option<QuickPasteCursorSnapshot> {
+        let offset = history_ids.iter().position(|current| *current == item_id)?;
+        self.order = history_ids.to_vec();
+        self.offset = Some(offset);
+        self.head_id = history_ids.first().copied();
+        self.last_used_at = Some(now);
+        Some(self.snapshot())
     }
 
     fn should_start_new_session(&self, now: Instant) -> bool {
@@ -182,6 +204,24 @@ enum QuickHistoryResolveResult {
     Item(Box<ClipboardItem>),
     Boundary(QuickPasteBoundary),
     Empty,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchHotkeyInstruction {
+    ShowQuickSearchWindow,
+    HideQuickSearchWindow,
+    EmitQuickSearchOpened,
+}
+
+fn search_hotkey_instructions(search_window_visible: bool) -> Vec<SearchHotkeyInstruction> {
+    if search_window_visible {
+        return vec![SearchHotkeyInstruction::HideQuickSearchWindow];
+    }
+
+    vec![
+        SearchHotkeyInstruction::ShowQuickSearchWindow,
+        SearchHotkeyInstruction::EmitQuickSearchOpened,
+    ]
 }
 
 pub fn head_id(items: &[ClipboardItem]) -> Option<i64> {
@@ -442,8 +482,7 @@ fn handle_hotkey_action(app: &AppHandle, action: HotkeyAction) {
             }
         }
         HotkeyAction::Search => {
-            let _ = windows::show_main_window(app);
-            let _ = app.emit(events::CLIPBOARD_FOCUS_SEARCH, ());
+            handle_search_hotkey(app);
         }
         HotkeyAction::Pause => {
             if let Some(state) = app.try_state::<AppState>() {
@@ -471,6 +510,22 @@ fn handle_hotkey_action(app: &AppHandle, action: HotkeyAction) {
         HotkeyAction::FixedContent(id) => {
             if let Err(error) = paste_fixed_content(app, id) {
                 tracing::warn!(target: "hotkeys", "fixed content paste failed: {error}");
+            }
+        }
+    }
+}
+
+fn handle_search_hotkey(app: &AppHandle) {
+    for instruction in search_hotkey_instructions(windows::is_search_window_visible(app)) {
+        match instruction {
+            SearchHotkeyInstruction::ShowQuickSearchWindow => {
+                let _ = windows::show_search_window(app);
+            }
+            SearchHotkeyInstruction::HideQuickSearchWindow => {
+                let _ = windows::hide_search_window(app);
+            }
+            SearchHotkeyInstruction::EmitQuickSearchOpened => {
+                let _ = app.emit(events::QUICK_SEARCH_OPENED, ());
             }
         }
     }
@@ -1122,6 +1177,25 @@ mod tests {
     }
 
     #[test]
+    fn search_hotkey_targets_quick_search_overlay_when_hidden() {
+        assert_eq!(
+            search_hotkey_instructions(false),
+            vec![
+                SearchHotkeyInstruction::ShowQuickSearchWindow,
+                SearchHotkeyInstruction::EmitQuickSearchOpened,
+            ]
+        );
+    }
+
+    #[test]
+    fn search_hotkey_hides_quick_search_overlay_when_visible() {
+        assert_eq!(
+            search_hotkey_instructions(true),
+            vec![SearchHotkeyInstruction::HideQuickSearchWindow]
+        );
+    }
+
+    #[test]
     fn quick_history_action_uses_copy_result_and_updates_cursor() {
         let state = AppState::new(repo());
         let older = state
@@ -1469,6 +1543,31 @@ mod tests {
                 now + Duration::from_secs(2)
             ),
             QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Oldest)
+        );
+    }
+
+    #[test]
+    fn cursor_can_be_anchored_to_a_clicked_history_item() {
+        let mut cursor = QuickPasteCursor::default();
+        let now = Instant::now();
+
+        let snapshot = cursor.select_at(8, &[10, 9, 8, 7], now).unwrap();
+
+        assert_eq!(
+            snapshot,
+            QuickPasteCursorSnapshot {
+                offset: Some(2),
+                head_id: Some(10),
+                selected_item_id: Some(8),
+            }
+        );
+        assert_eq!(
+            cursor.resolve_at(
+                QuickPasteDirection::Newer,
+                &[10, 9, 8, 7],
+                now + Duration::from_secs(1)
+            ),
+            QuickPasteCursorResolution::Item(9)
         );
     }
 

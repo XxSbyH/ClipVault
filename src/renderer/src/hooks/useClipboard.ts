@@ -12,6 +12,7 @@ export function useClipboardData(): void {
   useEffect(() => {
     const offNewItem = clipboardApi.onNewItem((item) => {
       upsertItem(item);
+      setSelectedItemId(item.id);
     });
     const offQuickPasteCursor = clipboardApi.onQuickPasteCursor((payload) => {
       setSelectedItemId(payload.selectedItemId);

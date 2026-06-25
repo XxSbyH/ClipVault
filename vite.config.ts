@@ -26,7 +26,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve(rendererRoot, 'index.html'),
-        hud: resolve(rendererRoot, 'hud.html')
+        hud: resolve(rendererRoot, 'hud.html'),
+        search: resolve(rendererRoot, 'search.html')
       }
     }
   }

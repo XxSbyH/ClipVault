@@ -4,10 +4,13 @@ use crate::errors::{AppError, AppResult};
 
 const HUD_TOP_OFFSET: i32 = 18;
 const MIN_VISIBLE_WINDOW_AREA_DENOMINATOR: i128 = 4;
+const SEARCH_RIGHT_OFFSET: i32 = 180;
+const SEARCH_UP_OFFSET: i32 = 120;
 
 pub fn configure_windows(app: &AppHandle) -> AppResult<()> {
     configure_main_window(app)?;
     configure_hud_window(app)?;
+    configure_search_window(app)?;
     Ok(())
 }
 
@@ -146,6 +149,41 @@ pub fn hide_main_window(app: &AppHandle) -> AppResult<()> {
         .map_err(|err| AppError::from(format!("failed to hide main window: {err}")))
 }
 
+pub fn show_search_window(app: &AppHandle) -> AppResult<()> {
+    let Some(window) = app.get_webview_window("search") else {
+        return Err(AppError::from("search window not found"));
+    };
+    window
+        .unminimize()
+        .map_err(|err| AppError::from(format!("failed to unminimize search window: {err}")))?;
+    position_search_window(&window)?;
+    window
+        .show()
+        .map_err(|err| AppError::from(format!("failed to show search window: {err}")))?;
+    window
+        .set_focus()
+        .map_err(|err| AppError::from(format!("failed to focus search window: {err}")))?;
+    Ok(())
+}
+
+pub fn hide_search_window(app: &AppHandle) -> AppResult<()> {
+    let Some(window) = app.get_webview_window("search") else {
+        return Err(AppError::from("search window not found"));
+    };
+    window
+        .hide()
+        .map_err(|err| AppError::from(format!("failed to hide search window: {err}")))
+}
+
+pub fn is_search_window_visible(app: &AppHandle) -> bool {
+    let Some(window) = app.get_webview_window("search") else {
+        return false;
+    };
+    let visible = window.is_visible().unwrap_or(false);
+    let minimized = window.is_minimized().unwrap_or(true);
+    visible && !minimized
+}
+
 pub fn is_main_window_visible(app: &AppHandle) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
@@ -203,6 +241,31 @@ fn configure_hud_window(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
+fn configure_search_window(app: &AppHandle) -> AppResult<()> {
+    let Some(window) = app.get_webview_window("search") else {
+        return Ok(());
+    };
+    window
+        .set_decorations(false)
+        .map_err(|err| AppError::from(format!("failed to configure search decorations: {err}")))?;
+    let _ = window.set_resizable(false);
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_shadow(false);
+    let _ = window.set_skip_taskbar(true);
+    let close_window = window.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = close_window.hide();
+        }
+        WindowEvent::Focused(false) => {
+            let _ = close_window.hide();
+        }
+        _ => {}
+    });
+    Ok(())
+}
+
 fn position_hud_window(window: &WebviewWindow) -> AppResult<()> {
     let Some(monitor) = window
         .primary_monitor()
@@ -224,6 +287,47 @@ fn position_hud_window(window: &WebviewWindow) -> AppResult<()> {
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|err| AppError::from(format!("failed to position HUD window: {err}")))?;
     Ok(())
+}
+
+fn position_search_window(window: &WebviewWindow) -> AppResult<()> {
+    let Some(monitor) = window
+        .primary_monitor()
+        .map_err(|err| AppError::from(format!("failed to read primary monitor: {err}")))?
+    else {
+        return Ok(());
+    };
+
+    let work_area = monitor.work_area();
+    let window_size = window
+        .outer_size()
+        .map_err(|err| AppError::from(format!("failed to read search window size: {err}")))?;
+    let position = search_window_position(
+        WorkArea {
+            x: work_area.position.x,
+            y: work_area.position.y,
+            width: work_area.size.width.min(i32::MAX as u32) as i32,
+            height: work_area.size.height.min(i32::MAX as u32) as i32,
+        },
+        WindowSize {
+            width: window_size.width.min(i32::MAX as u32) as i32,
+            height: window_size.height.min(i32::MAX as u32) as i32,
+        },
+    );
+
+    window
+        .set_position(position)
+        .map_err(|err| AppError::from(format!("failed to position search window: {err}")))?;
+    Ok(())
+}
+
+fn search_window_position(area: WorkArea, size: WindowSize) -> PhysicalPosition<i32> {
+    let available_x = (area.width - size.width).max(0);
+    let available_y = (area.height - size.height).max(0);
+    let center_x = area.x + available_x / 2;
+    let center_y = area.y + available_y / 2;
+    let x = (center_x + SEARCH_RIGHT_OFFSET).min(area.x + available_x);
+    let y = (center_y - SEARCH_UP_OFFSET).max(area.y);
+    PhysicalPosition::new(x, y)
 }
 
 #[cfg(test)]
@@ -298,5 +402,23 @@ mod tests {
         assert!(main_window_is_presented(true, false));
         assert!(!main_window_is_presented(true, true));
         assert!(!main_window_is_presented(false, false));
+    }
+
+    #[test]
+    fn search_window_position_is_shifted_up_and_right_in_primary_work_area() {
+        let position = search_window_position(
+            WorkArea {
+                x: 40,
+                y: 20,
+                width: 1600,
+                height: 900,
+            },
+            WindowSize {
+                width: 520,
+                height: 300,
+            },
+        );
+
+        assert_eq!(position, PhysicalPosition::new(760, 200));
     }
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ClipVault",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "identifier": "com.clipvault.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -31,6 +31,20 @@
         "decorations": false,
         "resizable": false,
         "focusable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "transparent": true,
+        "shadow": false
+      },
+      {
+        "label": "search",
+        "title": "ClipVault Search",
+        "url": "search.html",
+        "width": 520,
+        "height": 300,
+        "visible": false,
+        "decorations": false,
+        "resizable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "transparent": true,

@@ -159,19 +159,27 @@ export function ClipboardList({ onAddFixedContent }: ClipboardListProps = {}): J
     void clipboardApi.getHistory(getHistoryFetchLimit(settings)).then(setItems);
   }, [setItems, settings]);
 
-  const onPaste = useCallback(
+  const selectHistoryItem = useCallback(
     (id: number) => {
       setSelectedItemId(id);
-      void clipboardApi.pasteItem(id);
+      void clipboardApi.setQuickPasteCursor(id).catch(() => undefined);
     },
     [setSelectedItemId]
+  );
+
+  const onPaste = useCallback(
+    (id: number) => {
+      selectHistoryItem(id);
+      void clipboardApi.pasteItem(id);
+    },
+    [selectHistoryItem]
   );
 
   const onCopy = useCallback(
     (id: number) => {
       const seq = copyRequestSeqRef.current + 1;
       copyRequestSeqRef.current = seq;
-      setSelectedItemId(id);
+      selectHistoryItem(id);
       copyQueueRef.current = copyQueueRef.current.catch(() => undefined).then(async () => {
         if (seq !== copyRequestSeqRef.current) {
           return;
@@ -180,12 +188,12 @@ export function ClipboardList({ onAddFixedContent }: ClipboardListProps = {}): J
         if (result.success && result.item) {
           upsertItem(result.item);
           if (seq === copyRequestSeqRef.current) {
-            setSelectedItemId(result.item.id);
+            selectHistoryItem(result.item.id);
           }
         }
       });
     },
-    [setSelectedItemId, upsertItem]
+    [selectHistoryItem, upsertItem]
   );
 
   const onTogglePin = useCallback(
@@ -233,9 +241,9 @@ export function ClipboardList({ onAddFixedContent }: ClipboardListProps = {}): J
 
   const onSelect = useCallback(
     (id: number) => {
-      setSelectedItemId(id);
+      selectHistoryItem(id);
     },
-    [setSelectedItemId]
+    [selectHistoryItem]
   );
 
   const openContextMenu = useCallback((item: ClipboardItemType, x: number, y: number) => {
@@ -245,15 +253,15 @@ export function ClipboardList({ onAddFixedContent }: ClipboardListProps = {}): J
   const onSpecialPaste = useCallback(
     (item: ClipboardItemType, action: SpecialPasteAction) => {
       setContextMenu(null);
-      setSelectedItemId(item.id);
+      selectHistoryItem(item.id);
       void clipboardApi.specialPasteItem(item.id, action).then((result) => {
         if (result.success && result.item) {
           upsertItem(result.item);
-          setSelectedItemId(result.item.id);
+          selectHistoryItem(result.item.id);
         }
       });
     },
-    [setSelectedItemId, upsertItem]
+    [selectHistoryItem, upsertItem]
   );
 
   const openWorkbench = useCallback((item: ClipboardItemType) => {
@@ -277,18 +285,18 @@ export function ClipboardList({ onAddFixedContent }: ClipboardListProps = {}): J
     async (item: ClipboardItemType, content: string) => {
       const updated = await clipboardApi.updateTextItem(item.id, content);
       upsertItem(updated);
-      setSelectedItemId(updated.id);
+      selectHistoryItem(updated.id);
     },
-    [setSelectedItemId, upsertItem]
+    [selectHistoryItem, upsertItem]
   );
 
   const saveNewTextItem = useCallback(
     async (content: string) => {
       const item = await clipboardApi.createTextItem(content);
       upsertItem(item);
-      setSelectedItemId(item.id);
+      selectHistoryItem(item.id);
     },
-    [setSelectedItemId, upsertItem]
+    [selectHistoryItem, upsertItem]
   );
 
   useEffect(() => {
@@ -435,7 +443,6 @@ export function ClipboardList({ onAddFixedContent }: ClipboardListProps = {}): J
         }}
         onSaveCurrent={saveCurrentTextItem}
         onSaveNew={saveNewTextItem}
-        onAddFixedContent={(item, content) => addFixedContentFromItem(item, content)}
       />
     </div>
   );

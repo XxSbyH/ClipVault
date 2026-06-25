@@ -6,6 +6,7 @@ commands.allow = [
   "get_history",
   "get_history_revision",
   "search_items",
+  "set_quick_paste_cursor",
   "paste_item",
   "copy_item",
   "special_paste_item",
@@ -32,6 +33,7 @@ commands.allow = [
   "toggle_monitoring",
   "minimize_window",
   "hide_window",
+  "hide_search_window",
   "test_monitoring",
   "test_hud",
 ]

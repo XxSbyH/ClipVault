@@ -4,7 +4,8 @@
   "description": "Default permissions for ClipVault windows.",
   "windows": [
     "main",
-    "hud"
+    "hud",
+    "search"
   ],
   "permissions": [
     "core:default",

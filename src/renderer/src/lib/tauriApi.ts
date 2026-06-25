@@ -115,8 +115,14 @@ export const clipboardApi: ClipboardApi = {
   getHistoryRevision() {
     return invoke<number>('get_history_revision');
   },
-  searchItems(query) {
-    return invoke<ClipboardItem[]>('search_items', { query });
+  searchItems(query, limit) {
+    return invoke<ClipboardItem[]>(
+      'search_items',
+      limit === undefined ? { query } : { query, limit }
+    );
+  },
+  setQuickPasteCursor(id) {
+    return invoke<void>('set_quick_paste_cursor', { id });
   },
   async pasteItem(id) {
     try {
@@ -215,6 +221,9 @@ export const clipboardApi: ClipboardApi = {
   hideWindow() {
     return invoke<void>('hide_window');
   },
+  hideSearchWindow() {
+    return invoke<void>('hide_search_window');
+  },
   getHotkeys() {
     return invoke<HotkeySettings>('get_hotkeys');
   },
@@ -254,6 +263,9 @@ export const clipboardApi: ClipboardApi = {
   },
   onFocusSearch(handler) {
     return listenPayload<void>('clipboard:focus-search', handler);
+  },
+  onQuickSearchOpened(handler) {
+    return listenPayload<void>('quick-search:opened', handler);
   },
   onOpenSettings(handler) {
     return listenPayload<void>('clipboard:open-settings', handler);

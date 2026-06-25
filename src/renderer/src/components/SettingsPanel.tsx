@@ -460,7 +460,7 @@ export function SettingsPanel({
   const safeSettings = useMemo<AppSettings>(
     () =>
       settings ?? {
-        retentionDays: 7,
+        retentionDays: 0,
         maxItems: 10000,
         enableSensitiveFilter: true,
         enableBlacklist: true,
@@ -1022,16 +1022,19 @@ export function SettingsPanel({
               </div>
             </div>
             <div className="grid min-h-[58px] grid-cols-[1fr_180px] items-center gap-4 rounded-[1.15rem] border border-slate-200 bg-white px-4 py-3">
-              <span className="text-sm font-semibold">保留时长</span>
+              <div className="min-w-0">
+                <span className="text-sm font-semibold">历史保留时长</span>
+                <p className="mt-1 text-xs text-muted-foreground">仅清理超过时长的非收藏项；永久保留仍受最大条目数限制。</p>
+              </div>
               <select
                 className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
                 value={safeSettings.retentionDays}
                 onChange={(event) => update('retentionDays', Number(event.target.value))}
               >
+                <option value={0}>永久保留</option>
                 <option value={7}>7 天</option>
                 <option value={14}>14 天</option>
                 <option value={30}>30 天</option>
-                <option value={3650}>永久</option>
               </select>
             </div>
             <div className="grid min-h-[58px] grid-cols-[1fr_180px] items-center gap-4 rounded-[1.15rem] border border-slate-200 bg-white px-4 py-3">
@@ -1464,7 +1467,7 @@ export function SettingsPanel({
 
           <TabsContent value="about" className="settings-tab-panel min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 pt-2.5 text-sm">
             <div className="rounded-[1.25rem] border border-slate-200 bg-white p-4">
-              <p className="font-black text-slate-950">ClipVault v2.0.0</p>
+              <p className="font-black text-slate-950">ClipVault v2.1.4</p>
               <p className="mt-2 text-muted-foreground">当前缓存条目：{itemsCount}</p>
               <p className="mt-1 text-muted-foreground">数据默认保存在本地 Tauri 应用数据目录。</p>
             </div>

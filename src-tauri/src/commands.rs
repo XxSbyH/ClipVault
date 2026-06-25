@@ -24,8 +24,8 @@ use crate::{
     models::{
         AppSettings, BlacklistApp, ClipboardContentType, ClipboardInsertInput, ClipboardItem,
         FixedContent, FixedContentInput, HotkeySettings, HotkeySettingsPatch, HudDirection,
-        HudPayload, MonitoringStatus, SpecialPasteAction, WheelShortcutModifier,
-        WheelShortcutScope,
+        HudPayload, MonitoringStatus, QuickPasteCursorPayload, SpecialPasteAction,
+        WheelShortcutModifier, WheelShortcutScope,
     },
     paste, settings, text_transform, windows,
 };
@@ -227,6 +227,23 @@ pub fn search_items_impl(
     } else {
         state.repository().search_items(query.trim(), limit)
     }
+}
+
+pub fn set_quick_paste_cursor_impl(
+    state: &AppState,
+    id: i64,
+) -> AppResult<QuickPasteCursorSnapshot> {
+    let total = state.repository().count_items()?;
+    let history_ids = state
+        .repository()
+        .get_history(total)?
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+
+    state
+        .quick_paste_cursor_mut(|cursor| cursor.select(id, &history_ids))
+        .ok_or_else(|| AppError::from(format!("clipboard item {id} not found in history")))
 }
 
 pub fn paste_item_impl<F>(state: &AppState, id: i64, paste: F) -> AppResult<PasteResult>
@@ -940,6 +957,17 @@ pub fn search_items(
 }
 
 #[tauri::command]
+pub fn set_quick_paste_cursor(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> AppResult<()> {
+    let snapshot = set_quick_paste_cursor_impl(state.inner(), id)?;
+    emit_quick_paste_cursor(&app, &snapshot);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn paste_item(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<PasteResult> {
     let result = paste_item_impl(state.inner(), id, |item| {
         paste::write_clipboard_and_paste(&app, item)
@@ -1291,6 +1319,11 @@ pub fn hide_window(app: AppHandle, window: Window) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn hide_search_window(app: AppHandle) -> AppResult<()> {
+    windows::hide_search_window(&app)
+}
+
+#[tauri::command]
 pub fn test_monitoring(state: State<'_, AppState>) -> MonitoringStatus {
     test_monitoring_impl(state.inner())
 }
@@ -1305,6 +1338,16 @@ pub fn test_hud(app: AppHandle) -> HudPayload {
 pub fn emit_hud_notification(app: &AppHandle, payload: HudPayload) {
     let _ = windows::show_hud_window(app);
     let _ = app.emit(events::HUD_SHOW, &payload);
+}
+
+pub fn emit_quick_paste_cursor(app: &AppHandle, snapshot: &QuickPasteCursorSnapshot) {
+    let _ = app.emit(
+        events::QUICK_PASTE_CURSOR_CHANGED,
+        QuickPasteCursorPayload {
+            selected_item_id: snapshot.selected_item_id,
+            boundary: None,
+        },
+    );
 }
 
 fn emit_history_revision(app: &AppHandle, revision: u64) {
@@ -2081,6 +2124,30 @@ mod tests {
         assert_eq!(result.revision, 0);
         assert_eq!(stored.use_count, 0);
         assert_eq!(state.history_revision(), 0);
+    }
+
+    #[test]
+    fn commands_set_quick_paste_cursor_anchors_existing_history_item() {
+        let state = super::AppState::new(repo());
+        state
+            .repository()
+            .insert_clipboard_item(text_input("oldest", "hash-oldest"))
+            .unwrap();
+        let middle = state
+            .repository()
+            .insert_clipboard_item(text_input("middle", "hash-middle"))
+            .unwrap();
+        let newest = state
+            .repository()
+            .insert_clipboard_item(text_input("newest", "hash-newest"))
+            .unwrap();
+
+        let snapshot = super::set_quick_paste_cursor_impl(&state, middle.id).unwrap();
+
+        assert_eq!(snapshot.head_id, Some(newest.id));
+        assert_eq!(snapshot.selected_item_id, Some(middle.id));
+        assert_eq!(snapshot.offset, Some(1));
+        assert_eq!(state.quick_paste_cursor(), snapshot);
     }
 
     #[test]

@@ -61,6 +61,7 @@ pub fn run() {
             commands::get_history,
             commands::get_history_revision,
             commands::search_items,
+            commands::set_quick_paste_cursor,
             commands::paste_item,
             commands::copy_item,
             commands::special_paste_item,
@@ -87,6 +88,7 @@ pub fn run() {
             commands::toggle_monitoring,
             commands::minimize_window,
             commands::hide_window,
+            commands::hide_search_window,
             commands::test_monitoring,
             commands::test_hud
         ])

@@ -12,6 +12,7 @@ const {
   hideWindowMock,
   listPropsMock,
   pasteItemMock,
+  setQuickPasteCursorMock,
   scrollToItemMock,
   specialPasteItemMock,
   updateTextItemMock
@@ -22,6 +23,7 @@ const {
   hideWindowMock: vi.fn(),
   listPropsMock: vi.fn(),
   pasteItemMock: vi.fn(),
+  setQuickPasteCursorMock: vi.fn(),
   scrollToItemMock: vi.fn(),
   specialPasteItemMock: vi.fn(),
   updateTextItemMock: vi.fn()
@@ -35,6 +37,7 @@ vi.mock('@/lib/tauriApi', () => ({
     deleteItem: deleteItemMock,
     hideWindow: hideWindowMock,
     pasteItem: pasteItemMock,
+    setQuickPasteCursor: setQuickPasteCursorMock,
     specialPasteItem: specialPasteItemMock,
     togglePin: vi.fn(),
     toggleFavorite: vi.fn(),
@@ -122,6 +125,7 @@ describe('ClipboardList', () => {
     deleteItemMock.mockResolvedValue({ success: true });
     hideWindowMock.mockResolvedValue(undefined);
     pasteItemMock.mockResolvedValue({ success: true });
+    setQuickPasteCursorMock.mockResolvedValue(undefined);
     specialPasteItemMock.mockImplementation((id: number) => {
       const item = useClipboardStore.getState().items.find((entry) => entry.id === id);
       return Promise.resolve({
@@ -218,6 +222,16 @@ describe('ClipboardList', () => {
     expect(useClipboardStore.getState().selectedItemId).toBe(1);
   });
 
+  it('syncs the quick paste cursor to the clicked history item', async () => {
+    render(<ClipboardList />);
+
+    const row = screen.getByText('alpha').closest('[role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.click(row as HTMLElement);
+
+    expect(setQuickPasteCursorMock).toHaveBeenCalledWith(1);
+  });
+
   it('pastes a double-clicked history item', async () => {
     render(<ClipboardList />);
 
@@ -236,11 +250,31 @@ describe('ClipboardList', () => {
     const row = screen.getByText('alpha').closest('[role="button"]');
     expect(row).toBeTruthy();
     fireEvent.contextMenu(row as HTMLElement);
+
+    expect(await screen.findByRole('menuitem', { name: '特殊粘贴' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '编辑内容' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '添加为固定内容' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '剪切项排序（开发中）' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '全部大写' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '特殊粘贴' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: '全部大写' }));
 
     await waitFor(() => {
       expect(specialPasteItemMock).toHaveBeenCalledWith(1, 'upper');
     });
+  });
+
+  it('renders the context menu in a document portal so fixed coordinates match the cursor', async () => {
+    render(<ClipboardList />);
+
+    const row = screen.getByText('alpha').closest('[role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.contextMenu(row as HTMLElement, { clientX: 120, clientY: 96 });
+
+    const menu = await screen.findByRole('menu', { name: '历史项操作' });
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu).toHaveStyle({ left: '120px', top: '96px' });
   });
 
   it('opens the text workbench from the context menu and saves edits', async () => {
@@ -261,8 +295,28 @@ describe('ClipboardList', () => {
     });
   });
 
-  it('applies text workbench transforms and saves as a new item', async () => {
-    createTextItemMock.mockResolvedValue(makeItem(9, 'HELLO'));
+  it('opens a compact text edit dialog with only save actions', async () => {
+    render(<ClipboardList />);
+
+    const row = screen.getByText('alpha').closest('[role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.contextMenu(row as HTMLElement);
+    fireEvent.click(await screen.findByRole('menuitem', { name: '编辑内容' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveClass('max-h-[calc(100vh-2rem)]');
+    expect(dialog).toHaveClass('max-w-[560px]');
+    expect(dialog).toHaveClass('overflow-y-auto');
+    expect(dialog.querySelector('[data-testid="text-workbench-grid"]')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存到当前历史' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '另存为新记录' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '全部大写' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '添加为固定内容' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('查找')).not.toBeInTheDocument();
+  });
+
+  it('saves edited content as a new item from the compact edit dialog', async () => {
+    createTextItemMock.mockResolvedValue(makeItem(9, 'hello'));
     render(<ClipboardList />);
 
     const row = screen.getByText('alpha').closest('[role="button"]');
@@ -270,11 +324,10 @@ describe('ClipboardList', () => {
     fireEvent.contextMenu(row as HTMLElement);
     fireEvent.click(await screen.findByRole('menuitem', { name: '编辑内容' }));
     fireEvent.change(await screen.findByLabelText('编辑结果'), { target: { value: 'hello' } });
-    fireEvent.click(screen.getByRole('button', { name: '全部大写' }));
-    fireEvent.click(screen.getByRole('button', { name: '另存为新历史' }));
+    fireEvent.click(screen.getByRole('button', { name: '另存为新记录' }));
 
     await waitFor(() => {
-      expect(createTextItemMock).toHaveBeenCalledWith('HELLO');
+      expect(createTextItemMock).toHaveBeenCalledWith('hello');
     });
   });
 

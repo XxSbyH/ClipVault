@@ -70,6 +70,9 @@ fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
+    if let Some(window) = app.get_webview_window("search") {
+        let _ = window.hide();
+    }
 }
 
 #[cfg(target_os = "windows")]

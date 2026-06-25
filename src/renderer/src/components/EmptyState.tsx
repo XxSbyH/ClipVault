@@ -13,7 +13,7 @@ export function EmptyState(): JSX.Element {
         </p>
         <div className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-teal-800 shadow-sm">
           <Search className="h-3.5 w-3.5" />
-          Ctrl+F 快速搜索
+          Ctrl+Shift+F 轻量搜索
         </div>
       </div>
     </div>

@@ -85,6 +85,37 @@ describe('clipboardApi Tauri adapter', () => {
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
+  it('invokes set_quick_paste_cursor with the selected history id', async () => {
+    const { clipboardApi } = await import('./tauriApi');
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await expect(clipboardApi.setQuickPasteCursor(7)).resolves.toBeUndefined();
+
+    expect(invokeMock).toHaveBeenCalledWith('set_quick_paste_cursor', { id: 7 });
+  });
+
+  it('maps quick search window commands and events', async () => {
+    const unlisten = vi.fn();
+    const handler = vi.fn();
+    listenMock.mockImplementationOnce(async (_eventName, callback) => {
+      callback({ payload: undefined });
+      return unlisten;
+    });
+    const { clipboardApi } = await import('./tauriApi');
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await expect(clipboardApi.hideSearchWindow()).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenCalledWith('hide_search_window');
+
+    const off = clipboardApi.onQuickSearchOpened(handler);
+    await Promise.resolve();
+    off();
+
+    expect(listenMock).toHaveBeenCalledWith('quick-search:opened', expect.any(Function));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
   it('maps delete_item success and rejected invoke to old result shape', async () => {
     const { clipboardApi } = await import('./tauriApi');
     invokeMock.mockResolvedValueOnce(2);

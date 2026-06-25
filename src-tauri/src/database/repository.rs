@@ -1279,7 +1279,7 @@ mod tests {
             .update_setting("retentionDays", json!("not-a-number"))
             .unwrap_err();
         assert!(error.to_string().contains("retentionDays"));
-        assert_eq!(repo.get_settings().unwrap().retention_days, 7);
+        assert_eq!(repo.get_settings().unwrap().retention_days, 0);
 
         let max_items_error = repo.update_setting("maxItems", json!(0)).unwrap_err();
         assert!(max_items_error.to_string().contains("maxItems"));

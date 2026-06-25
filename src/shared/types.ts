@@ -63,7 +63,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  retentionDays: 7,
+  retentionDays: 0,
   maxItems: 10000,
   enableSensitiveFilter: true,
   enableBlacklist: true,
@@ -158,7 +158,8 @@ export type FilterType = 'all' | 'text' | 'image' | 'code' | 'url' | 'favorite';
 export interface ClipboardApi {
   getHistory: (limit?: number) => Promise<ClipboardItem[]>;
   getHistoryRevision: () => Promise<number>;
-  searchItems: (query: string) => Promise<ClipboardItem[]>;
+  searchItems: (query: string, limit?: number) => Promise<ClipboardItem[]>;
+  setQuickPasteCursor: (id: number) => Promise<void>;
   pasteItem: (id: number) => Promise<{ success: boolean; error?: string }>;
   specialPasteItem: (
     id: number,
@@ -187,6 +188,7 @@ export interface ClipboardApi {
   toggleMonitoring: () => Promise<boolean>;
   minimizeWindow: () => Promise<void>;
   hideWindow: () => Promise<void>;
+  hideSearchWindow: () => Promise<void>;
   getHotkeys: () => Promise<HotkeySettings>;
   updateHotkeys: (hotkeys: Partial<HotkeySettings>) => Promise<HotkeySettings>;
   checkHotkeyConflicts: (hotkeys: Partial<HotkeySettings>) => Promise<string[]>;
@@ -198,6 +200,7 @@ export interface ClipboardApi {
   onNewItem: (handler: (item: ClipboardItem) => void) => () => void;
   onQuickPasteCursor: (handler: (payload: QuickPasteCursorPayload) => void) => () => void;
   onFocusSearch: (handler: () => void) => () => void;
+  onQuickSearchOpened: (handler: () => void) => () => void;
   onOpenSettings: (handler: () => void) => () => void;
   onOpenHotkeys: (handler: () => void) => () => void;
   onWindowMoving: (handler: (moving: boolean) => void) => () => void;

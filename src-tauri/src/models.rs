@@ -165,7 +165,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            retention_days: 7,
+            retention_days: 0,
             max_items: 10_000,
             enable_sensitive_filter: true,
             enable_blacklist: true,
@@ -384,7 +384,7 @@ mod tests {
     fn default_app_settings_match_shared_types() {
         let settings = AppSettings::default();
 
-        assert_eq!(settings.retention_days, 7);
+        assert_eq!(settings.retention_days, 0);
         assert_eq!(settings.max_items, 10_000);
         assert!(settings.enable_sensitive_filter);
         assert!(settings.enable_blacklist);

@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::{
-    commands::{AppState, HistoryRevisionPayload},
+    commands::{self, AppState, HistoryRevisionPayload},
     detector::{create_preview, detect_content_type, parse_single_file_path},
     errors::{AppError, AppResult},
     events,
@@ -248,7 +248,9 @@ fn insert_and_emit(
     let item = state.repository().insert_clipboard_item(input)?;
     monitor.remember_hash(hash);
     state.set_monitoring_last_hash(monitor.last_hash());
+    let cursor = commands::set_quick_paste_cursor_impl(state, item.id)?;
     let revision = state.bump_history_revision();
+    commands::emit_quick_paste_cursor(app, &cursor);
     app.emit(events::CLIPBOARD_NEW_ITEM, &item)
         .map_err(|err| AppError::from(format!("failed to emit clipboard item: {err}")))?;
     let _ = app.emit(
