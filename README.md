@@ -72,6 +72,15 @@ ClipVault 是一个面向 Windows 的本地优先剪贴板管理器。它已从 
 https://github.com/XxSbyH/ClipVault/releases/latest
 ```
 
+发布文件说明：
+
+| 文件 | 系统 | 用途 |
+| --- | --- | --- |
+| `ClipVault_*_windows_x64_setup.exe` | Windows 10/11 x64 | 安装包，推荐大多数 Windows 用户使用 |
+| `ClipVault_*_windows_x64_portable.exe` | Windows 10/11 x64 | 便携版，适合免安装、临时运行或随身携带 |
+| `ClipVault_*_macos_universal.dmg` | macOS Intel / Apple Silicon | macOS 安装镜像，按系统方式安装 |
+| `ClipVault_*_macos_universal.app.zip` | macOS Intel / Apple Silicon | macOS 便携压缩包，解压后手动运行 |
+
 当前版本未配置代码签名，Windows 首次安装时可能出现安全提示。
 
 ### 默认快捷键
@@ -220,6 +229,15 @@ Download the latest Windows installer from Releases:
 ```text
 https://github.com/XxSbyH/ClipVault/releases/latest
 ```
+
+Release asset guide:
+
+| File | System | Use |
+| --- | --- | --- |
+| `ClipVault_*_windows_x64_setup.exe` | Windows 10/11 x64 | Installer, recommended for most Windows users |
+| `ClipVault_*_windows_x64_portable.exe` | Windows 10/11 x64 | Portable executable for no-install or temporary use |
+| `ClipVault_*_macos_universal.dmg` | macOS Intel / Apple Silicon | macOS disk image installer |
+| `ClipVault_*_macos_universal.app.zip` | macOS Intel / Apple Silicon | Portable macOS app archive |
 
 The current build is unsigned, so Windows may show a security prompt during first-time installation.
 
