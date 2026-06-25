@@ -24,7 +24,7 @@ const typeLabel: Record<NonNullable<HudPayload['type']>, string> = {
 };
 
 const kindLabel: Record<HudPayload['kind'], string> = {
-  quickPaste: '快速粘贴',
+  quickPaste: '快速复制',
   copy: '复制成功',
   panel: '控制面板',
   status: '状态'

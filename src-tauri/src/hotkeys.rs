@@ -658,7 +658,7 @@ fn quick_copy_boundary_payload(boundary: QuickPasteBoundary) -> HudPayload {
         QuickPasteBoundary::Newest => "游标已到开始",
         QuickPasteBoundary::Oldest => "游标已到末尾",
     };
-    HudPayload::panel("快速粘贴", text)
+    HudPayload::panel("快速复制", text)
 }
 
 fn emit_quick_paste_cursor(

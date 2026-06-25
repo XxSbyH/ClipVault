@@ -297,7 +297,7 @@ impl HudPayload {
     ) -> Self {
         Self {
             kind: HudKind::QuickPaste,
-            title: "快速粘贴".to_string(),
+            title: "快速复制".to_string(),
             content_type: Some(content_type),
             text,
             direction: Some(direction),
@@ -410,5 +410,16 @@ mod tests {
         assert_eq!(hotkeys.clear, "CommandOrControl+Shift+C");
         assert_eq!(hotkeys.quick_paste_prev, "Ctrl+Alt+Left");
         assert_eq!(hotkeys.quick_paste_next, "Ctrl+Alt+Right");
+    }
+
+    #[test]
+    fn quick_paste_hud_title_uses_quick_copy_copywriting() {
+        let payload = HudPayload::quick_paste(
+            HudDirection::Prev,
+            ClipboardContentType::Text,
+            "older".to_string(),
+        );
+
+        assert_eq!(payload.title, "快速复制");
     }
 }
