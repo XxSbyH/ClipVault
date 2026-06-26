@@ -27,6 +27,38 @@ pub fn write_text_and_paste(app: &AppHandle, text: &str) -> AppResult<()> {
 }
 
 pub fn write_item_to_clipboard(app: &AppHandle, item: &ClipboardItem) -> AppResult<()> {
+    if should_try_rich_formats(item) {
+        if let Some(state) = app.try_state::<crate::commands::AppState>() {
+            match state
+                .repository()
+                .list_clipboard_formats(item.id)
+                .and_then(|formats| {
+                    crate::clipboard::formats::write_supported_formats(
+                        &formats,
+                        item.content.as_deref(),
+                    )
+                }) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    tracing::warn!(
+                        target: "clipboard",
+                        area = "clipboard",
+                        direction = "write rich clipboard formats",
+                        "rich clipboard paste had no supported payloads; falling back"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "clipboard",
+                        area = "clipboard",
+                        direction = "write rich clipboard formats",
+                        "rich clipboard paste failed; falling back: {error}"
+                    );
+                }
+            }
+        }
+    }
+
     match item.content_type {
         ClipboardContentType::Text
         | ClipboardContentType::Url
@@ -58,6 +90,14 @@ pub fn write_item_to_clipboard(app: &AppHandle, item: &ClipboardItem) -> AppResu
                 .map_err(|err| AppError::from(format!("failed to write clipboard image: {err}")))
         }
     }
+}
+
+fn should_try_rich_formats(item: &ClipboardItem) -> bool {
+    item.metadata
+        .extra
+        .get("hasRichFormats")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
 }
 
 fn write_text_to_clipboard(app: &AppHandle, text: &str) -> AppResult<()> {
@@ -124,5 +164,41 @@ fn keyboard_input(key: VIRTUAL_KEY, key_up: bool) -> INPUT {
                 dwExtraInfo: 0,
             },
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::models::{ClipboardContentType, ClipboardItem, ClipboardMetadata};
+
+    fn text_item(content: &str) -> ClipboardItem {
+        ClipboardItem {
+            id: 1,
+            content: Some(content.to_string()),
+            content_type: ClipboardContentType::Text,
+            content_hash: "hash".to_string(),
+            preview: content.to_string(),
+            metadata: ClipboardMetadata::default(),
+            file_path: None,
+            image_data: None,
+            created_at: 1,
+            last_used_at: None,
+            use_count: 0,
+            is_pinned: false,
+            is_favorite: false,
+        }
+    }
+
+    #[test]
+    fn should_try_rich_formats_only_when_metadata_says_available() {
+        let mut item = text_item("hello");
+        assert!(!super::should_try_rich_formats(&item));
+
+        item.metadata
+            .extra
+            .insert("hasRichFormats".to_string(), json!(true));
+        assert!(super::should_try_rich_formats(&item));
     }
 }

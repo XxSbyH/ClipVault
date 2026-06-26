@@ -12,7 +12,10 @@ use crate::{
     detector::{create_preview, detect_content_type, parse_single_file_path},
     errors::{AppError, AppResult},
     events,
-    models::{ClipboardContentType, ClipboardInsertInput, ClipboardItem, ClipboardMetadata},
+    models::{
+        ClipboardContentType, ClipboardFormatInput, ClipboardInsertInput, ClipboardItem,
+        ClipboardMetadata,
+    },
     privacy::{filter::is_sensitive_content, foreground::is_blacklisted_foreground_app},
 };
 
@@ -175,7 +178,8 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
             settings.enable_sensitive_filter,
             monitor.last_hash(),
         ) {
-            insert_and_emit(app, state, *input, hash, monitor)?;
+            let formats = read_supported_formats_for_capture();
+            insert_and_emit_with_formats(app, state, *input, hash, monitor, formats)?;
             return Ok(());
         }
     }
@@ -211,7 +215,8 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
         .extra
         .insert("mimeType".to_string(), json!(processed.mime_type));
 
-    insert_and_emit(
+    let formats = read_supported_formats_for_capture();
+    insert_and_emit_with_formats(
         app,
         state,
         ClipboardInsertInput {
@@ -225,6 +230,7 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
         },
         hash,
         monitor,
+        formats,
     )?;
     monitor.next_image_scan_at = 0;
     Ok(())
@@ -244,14 +250,31 @@ fn is_blacklisted(
     Ok(monitor.last_blacklist_result)
 }
 
-fn insert_and_emit(
+fn insert_and_emit_with_formats(
     app: &AppHandle,
     state: &AppState,
-    input: ClipboardInsertInput,
+    mut input: ClipboardInsertInput,
     hash: String,
     monitor: &mut ClipboardMonitor,
+    formats: Vec<ClipboardFormatInput>,
 ) -> AppResult<()> {
+    let format_names = formats
+        .iter()
+        .map(|format| format.format_name.clone())
+        .collect::<Vec<_>>();
+    apply_rich_format_metadata(&mut input, &format_names);
     let item = state.repository().insert_clipboard_item(input)?;
+    for format in formats {
+        if let Err(error) = state.repository().insert_clipboard_format(item.id, &format) {
+            tracing::warn!(
+                target: "clipboard",
+                area = "clipboard",
+                direction = "persist rich clipboard format payload",
+                format_name = format.format_name,
+                "failed to store rich clipboard format: {error}"
+            );
+        }
+    }
     monitor.remember_hash(hash);
     state.set_monitoring_last_hash(monitor.last_hash());
     let cursor = commands::set_quick_paste_cursor_impl(state, item.id)?;
@@ -264,6 +287,47 @@ fn insert_and_emit(
         HistoryRevisionPayload { revision },
     );
     Ok(())
+}
+
+fn apply_rich_format_metadata(input: &mut ClipboardInsertInput, format_names: &[String]) {
+    if format_names.is_empty() {
+        return;
+    }
+
+    let mut names = Vec::new();
+    for name in format_names {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    let format_count = names.len();
+    let metadata = input
+        .metadata
+        .get_or_insert_with(ClipboardMetadata::default);
+    metadata
+        .extra
+        .insert("hasRichFormats".to_string(), json!(true));
+    metadata
+        .extra
+        .insert("formatNames".to_string(), json!(names));
+    metadata
+        .extra
+        .insert("formatCount".to_string(), json!(format_count));
+}
+
+fn read_supported_formats_for_capture() -> Vec<ClipboardFormatInput> {
+    match formats::read_supported_formats() {
+        Ok(formats) => formats,
+        Err(error) => {
+            tracing::warn!(
+                target: "clipboard",
+                area = "clipboard",
+                direction = "read supported rich clipboard formats",
+                "rich clipboard format capture skipped: {error}"
+            );
+            Vec::new()
+        }
+    }
 }
 
 fn file_metadata(path: &Path) -> ClipboardMetadata {
@@ -356,6 +420,27 @@ mod tests {
         assert_eq!(input.preview, "https://example.com");
         assert_eq!(input.content_hash, hash);
         assert_eq!(hash, "7142bd89ab7f64ee15a5c70be84827a8");
+    }
+
+    #[test]
+    fn rich_format_metadata_marks_item_without_polluting_preview() {
+        let mut input = match build_text_insert_input("hello", 100, true, "") {
+            CaptureDecision::Insert { input, .. } => *input,
+            _ => panic!("expected insert"),
+        };
+
+        apply_rich_format_metadata(
+            &mut input,
+            &["HTML Format".to_string(), "Rich Text Format".to_string()],
+        );
+
+        assert_eq!(input.preview, "hello");
+        let metadata = input.metadata.unwrap();
+        assert_eq!(metadata.extra["hasRichFormats"], json!(true));
+        assert_eq!(
+            metadata.extra["formatNames"],
+            json!(["HTML Format", "Rich Text Format"])
+        );
     }
 
     #[test]
