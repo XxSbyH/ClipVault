@@ -1,3 +1,4 @@
+pub mod formats;
 pub mod image;
 
 use std::{fs, path::Path, time::Duration};
