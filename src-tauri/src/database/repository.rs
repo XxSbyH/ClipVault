@@ -221,6 +221,82 @@ impl Repository {
         self.get_item_locked(&conn, id)
     }
 
+    pub fn find_by_content_hash(&self, content_hash: &str) -> AppResult<Option<ClipboardItem>> {
+        let conn = self.conn()?;
+        self.get_item_by_hash_locked(&conn, content_hash)
+    }
+
+    pub fn insert_imported_clipboard_item(
+        &self,
+        input: ClipboardInsertInput,
+        created_at: i64,
+        last_used_at: Option<i64>,
+        use_count: i64,
+        is_pinned: bool,
+        is_favorite: bool,
+    ) -> AppResult<ClipboardItem> {
+        let conn = self.conn()?;
+        if let Some(existing) = self.get_item_by_hash_locked(&conn, &input.content_hash)? {
+            return Ok(existing);
+        }
+
+        let metadata = serde_json::to_string(&input.metadata.unwrap_or_default())?;
+        conn.execute(
+            "INSERT INTO clipboard_items
+             (content, content_type, content_hash, preview, metadata, file_path, image_data,
+              created_at, last_used_at, use_count, is_pinned, is_favorite)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                input.content,
+                content_type_to_db(input.content_type),
+                input.content_hash,
+                input.preview,
+                metadata,
+                input.file_path,
+                input.image_data,
+                created_at,
+                last_used_at,
+                use_count,
+                bool_to_db(is_pinned),
+                bool_to_db(is_favorite),
+            ],
+        )?;
+        let id = conn.last_insert_rowid();
+        self.get_item_locked(&conn, id)
+    }
+
+    pub fn merge_imported_duplicate_state(
+        &self,
+        id: i64,
+        is_favorite: bool,
+        is_pinned: bool,
+        last_used_at: Option<i64>,
+        use_count: i64,
+    ) -> AppResult<ClipboardItem> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE clipboard_items
+             SET is_favorite = CASE WHEN COALESCE(is_favorite, 0) = 1 OR ?2 = 1 THEN 1 ELSE 0 END,
+                 is_pinned = CASE WHEN COALESCE(is_pinned, 0) = 1 OR ?3 = 1 THEN 1 ELSE 0 END,
+                 last_used_at = CASE
+                   WHEN last_used_at IS NULL THEN ?4
+                   WHEN ?4 IS NULL THEN last_used_at
+                   WHEN ?4 > last_used_at THEN ?4
+                   ELSE last_used_at
+                 END,
+                 use_count = MAX(COALESCE(use_count, 0), ?5)
+             WHERE id = ?1",
+            params![
+                id,
+                bool_to_db(is_favorite),
+                bool_to_db(is_pinned),
+                last_used_at,
+                use_count,
+            ],
+        )?;
+        self.get_item_locked(&conn, id)
+    }
+
     pub fn update_text_item(
         &self,
         id: i64,
@@ -1254,6 +1330,23 @@ mod tests {
 
         assert_eq!(used.use_count, 1);
         assert!(used.last_used_at.is_some());
+    }
+
+    #[test]
+    fn import_duplicate_merges_favorite_pin_last_used_and_use_count() {
+        let repo = repo();
+        let item = repo
+            .insert_clipboard_item(text_input("hello", "hash-hello"))
+            .unwrap();
+
+        let merged = repo
+            .merge_imported_duplicate_state(item.id, true, true, Some(item.created_at + 100), 9)
+            .unwrap();
+
+        assert!(merged.is_favorite);
+        assert!(merged.is_pinned);
+        assert_eq!(merged.last_used_at, Some(item.created_at + 100));
+        assert_eq!(merged.use_count, 9);
     }
 
     #[test]

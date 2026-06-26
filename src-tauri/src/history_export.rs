@@ -1,4 +1,8 @@
-use std::{fs::File, io::Write, path::Path};
+use std::{
+    fs::File,
+    io::{BufRead, BufReader, Read, Write},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
@@ -7,7 +11,8 @@ use crate::{
     database::repository::Repository,
     errors::{AppError, AppResult},
     models::{
-        ClipboardContentType, ClipboardFormatEncoding, ClipboardFormatPayload, ClipboardItem,
+        ClipboardContentType, ClipboardFormatEncoding, ClipboardFormatInput,
+        ClipboardFormatPayload, ClipboardInsertInput, ClipboardItem, ClipboardMetadata,
     },
 };
 
@@ -42,12 +47,16 @@ pub struct ExportHistoryItem {
     pub preview: String,
     pub content_type: String,
     pub content_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
     pub use_count: i64,
     pub is_pinned: bool,
     pub is_favorite: bool,
     pub metadata: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ExportFormatRef>,
     pub formats: Vec<ExportFormatRef>,
 }
 
@@ -69,10 +78,21 @@ pub struct HistoryExportResult {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryImportResult {
+    pub inserted: usize,
+    pub skipped_duplicates: usize,
+    pub merged_state: usize,
+    pub skipped_unsupported_formats: usize,
+    pub failed: usize,
+}
+
 impl ExportHistoryItem {
     fn from_item(
         item: &ClipboardItem,
         export_id: String,
+        image: Option<ExportFormatRef>,
         formats: Vec<ExportFormatRef>,
     ) -> AppResult<Self> {
         Ok(Self {
@@ -81,13 +101,33 @@ impl ExportHistoryItem {
             preview: item.preview.clone(),
             content_type: content_type_to_export(item.content_type).to_string(),
             content_hash: item.content_hash.clone(),
+            file_path: item.file_path.clone(),
             created_at: item.created_at,
             last_used_at: item.last_used_at,
             use_count: item.use_count,
             is_pinned: item.is_pinned,
             is_favorite: item.is_favorite,
             metadata: serde_json::to_value(&item.metadata)?,
+            image,
             formats,
+        })
+    }
+
+    fn to_insert_input(&self, image_data: Option<Vec<u8>>) -> AppResult<ClipboardInsertInput> {
+        if self.content_hash.trim().is_empty() {
+            return Err("history import item is missing contentHash".into());
+        }
+        Ok(ClipboardInsertInput {
+            content: self.content.clone(),
+            content_type: content_type_from_export(&self.content_type),
+            content_hash: self.content_hash.clone(),
+            preview: self.preview.clone(),
+            metadata: Some(
+                serde_json::from_value::<ClipboardMetadata>(self.metadata.clone())
+                    .unwrap_or_default(),
+            ),
+            file_path: self.file_path.clone(),
+            image_data,
         })
     }
 }
@@ -116,9 +156,12 @@ pub fn export_history(repo: &Repository, path: &Path) -> AppResult<HistoryExport
         for item in items {
             exported += 1;
             let export_id = format!("{exported:06}");
-            let formats = repo.list_clipboard_formats(item.id)?;
+            let item_id = item.id;
+            let detail = repo.get_item_by_id(item_id)?.unwrap_or(item);
+            let image = write_image_payload(&mut zip, options, &export_id, &detail)?;
+            let formats = repo.list_clipboard_formats(item_id)?;
             let refs = write_format_payloads(&mut zip, options, &export_id, &formats)?;
-            let export_item = ExportHistoryItem::from_item(&item, export_id, refs)?;
+            let export_item = ExportHistoryItem::from_item(&detail, export_id, image, refs)?;
             item_lines.push(serde_json::to_string(&export_item)?);
         }
     }
@@ -135,6 +178,228 @@ pub fn export_history(repo: &Repository, path: &Path) -> AppResult<HistoryExport
         exported,
         path: path.display().to_string(),
     })
+}
+
+pub fn import_history(repo: &Repository, path: &Path) -> AppResult<HistoryImportResult> {
+    let file = File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| zip_error("failed to open history import package", error))?;
+    let manifest = read_manifest(&mut archive)?;
+    validate_manifest(&manifest)?;
+    let items = read_items_jsonl(&mut archive)?;
+
+    let mut result = HistoryImportResult {
+        inserted: 0,
+        skipped_duplicates: 0,
+        merged_state: 0,
+        skipped_unsupported_formats: 0,
+        failed: 0,
+    };
+
+    for item in items {
+        if let Some(existing) = repo.find_by_content_hash(&item.content_hash)? {
+            let merged = repo.merge_imported_duplicate_state(
+                existing.id,
+                item.is_favorite,
+                item.is_pinned,
+                item.last_used_at,
+                item.use_count,
+            )?;
+            result.skipped_duplicates += 1;
+            if merged.is_favorite != existing.is_favorite
+                || merged.is_pinned != existing.is_pinned
+                || merged.last_used_at != existing.last_used_at
+                || merged.use_count != existing.use_count
+            {
+                result.merged_state += 1;
+            }
+            if repo.list_clipboard_formats(existing.id)?.is_empty() {
+                import_item_formats(repo, &mut archive, existing.id, &item, &mut result)?;
+            }
+            continue;
+        }
+
+        let image_data = read_image_payload(&mut archive, &item, &mut result)?;
+        let inserted = repo.insert_imported_clipboard_item(
+            item.to_insert_input(image_data)?,
+            item.created_at,
+            item.last_used_at,
+            item.use_count,
+            item.is_pinned,
+            item.is_favorite,
+        )?;
+        import_item_formats(repo, &mut archive, inserted.id, &item, &mut result)?;
+        result.inserted += 1;
+    }
+
+    Ok(result)
+}
+
+fn read_manifest(archive: &mut zip::ZipArchive<File>) -> AppResult<ExportManifest> {
+    let file = archive
+        .by_name("manifest.json")
+        .map_err(|error| zip_error("history import package is missing manifest.json", error))?;
+    Ok(serde_json::from_reader(file)?)
+}
+
+fn validate_manifest(manifest: &ExportManifest) -> AppResult<()> {
+    if manifest.app != "ClipVault" {
+        return Err("history import package is not a ClipVault export".into());
+    }
+    if manifest.export_type != "history" {
+        return Err("history import package must have type history".into());
+    }
+    if manifest.export_version != 1 {
+        return Err(format!(
+            "unsupported history import version: {}",
+            manifest.export_version
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn read_items_jsonl(archive: &mut zip::ZipArchive<File>) -> AppResult<Vec<ExportHistoryItem>> {
+    let file = archive
+        .by_name("items.jsonl")
+        .map_err(|error| zip_error("history import package is missing items.jsonl", error))?;
+    let reader = BufReader::new(file);
+    let mut items = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        items.push(serde_json::from_str::<ExportHistoryItem>(&line)?);
+    }
+    Ok(items)
+}
+
+fn import_item_formats(
+    repo: &Repository,
+    archive: &mut zip::ZipArchive<File>,
+    item_id: i64,
+    item: &ExportHistoryItem,
+    result: &mut HistoryImportResult,
+) -> AppResult<()> {
+    for format in &item.formats {
+        if !crate::clipboard::formats::is_supported_format_name(&format.format_name) {
+            result.skipped_unsupported_formats += 1;
+            continue;
+        }
+        if !valid_payload_path(&format.path) {
+            result.failed += 1;
+            continue;
+        }
+
+        let mut file = match archive.by_name(&format.path) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!(
+                    target: "history_export",
+                    area = "history_import",
+                    direction = "read rich format payload",
+                    path = format.path,
+                    "skipping missing history import payload: {error}"
+                );
+                result.failed += 1;
+                continue;
+            }
+        };
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+        if data.len() != format.byte_len as usize {
+            result.failed += 1;
+            continue;
+        }
+        if crate::clipboard::formats::data_hash(&data) != format.hash {
+            result.failed += 1;
+            continue;
+        }
+
+        repo.insert_clipboard_format(
+            item_id,
+            &ClipboardFormatInput {
+                format_name: format.format_name.clone(),
+                format_id: None,
+                mime_type: format.mime_type.clone(),
+                encoding: format_encoding_from_export(&format.encoding),
+                data,
+                data_hash: format.hash.clone(),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn read_image_payload(
+    archive: &mut zip::ZipArchive<File>,
+    item: &ExportHistoryItem,
+    result: &mut HistoryImportResult,
+) -> AppResult<Option<Vec<u8>>> {
+    let Some(image) = &item.image else {
+        return Ok(None);
+    };
+    if !valid_payload_path(&image.path) {
+        result.failed += 1;
+        return Ok(None);
+    }
+    let mut file = match archive.by_name(&image.path) {
+        Ok(file) => file,
+        Err(error) => {
+            tracing::warn!(
+                target: "history_export",
+                area = "history_import",
+                direction = "read image payload",
+                path = image.path,
+                "skipping missing history import image payload: {error}"
+            );
+            result.failed += 1;
+            return Ok(None);
+        }
+    };
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+    if data.len() != image.byte_len as usize {
+        result.failed += 1;
+        return Ok(None);
+    }
+    if crate::clipboard::formats::data_hash(&data) != image.hash {
+        result.failed += 1;
+        return Ok(None);
+    }
+    Ok(Some(data))
+}
+
+fn write_image_payload(
+    zip: &mut ZipWriter<File>,
+    options: SimpleFileOptions,
+    export_id: &str,
+    item: &ClipboardItem,
+) -> AppResult<Option<ExportFormatRef>> {
+    let Some(data) = item.image_data.as_deref() else {
+        return Ok(None);
+    };
+    if data.is_empty() {
+        return Ok(None);
+    }
+    let path = format!("formats/{export_id}-00-image.bin");
+    start_zip_file(zip, &path, options)?;
+    zip.write_all(data)?;
+    let mime_type = item
+        .metadata
+        .extra
+        .get("mimeType")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    Ok(Some(ExportFormatRef {
+        format_name: "PNG".to_string(),
+        mime_type,
+        encoding: "binary".to_string(),
+        byte_len: data.len() as i64,
+        hash: crate::clipboard::formats::data_hash(data),
+        path,
+    }))
 }
 
 fn write_format_payloads(
@@ -188,12 +453,39 @@ fn content_type_to_export(content_type: ClipboardContentType) -> &'static str {
     }
 }
 
+fn content_type_from_export(value: &str) -> ClipboardContentType {
+    match value {
+        "image" => ClipboardContentType::Image,
+        "file" => ClipboardContentType::File,
+        "url" => ClipboardContentType::Url,
+        "code" => ClipboardContentType::Code,
+        "color" => ClipboardContentType::Color,
+        "email" => ClipboardContentType::Email,
+        _ => ClipboardContentType::Text,
+    }
+}
+
 fn format_encoding_to_export(encoding: ClipboardFormatEncoding) -> &'static str {
     match encoding {
         ClipboardFormatEncoding::Utf8 => "utf8",
         ClipboardFormatEncoding::Utf16Le => "utf16le",
         ClipboardFormatEncoding::Binary => "binary",
     }
+}
+
+fn format_encoding_from_export(value: &str) -> ClipboardFormatEncoding {
+    match value {
+        "utf8" => ClipboardFormatEncoding::Utf8,
+        "utf16le" => ClipboardFormatEncoding::Utf16Le,
+        _ => ClipboardFormatEncoding::Binary,
+    }
+}
+
+fn valid_payload_path(path: &str) -> bool {
+    path.starts_with("formats/")
+        && !path.contains("..")
+        && !path.contains('\\')
+        && !path.ends_with('/')
 }
 
 fn format_slug(format_name: &str) -> String {
@@ -231,7 +523,7 @@ fn now_millis() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
+    use std::io::{Read, Write};
 
     use serde_json::Value;
 
@@ -264,12 +556,14 @@ mod tests {
             preview: "hello".to_string(),
             content_type: "text".to_string(),
             content_hash: "hash".to_string(),
+            file_path: None,
             created_at: 1,
             last_used_at: Some(2),
             use_count: 3,
             is_pinned: false,
             is_favorite: true,
             metadata: serde_json::json!({"hasRichFormats": true}),
+            image: None,
             formats: vec![ExportFormatRef {
                 format_name: "HTML Format".to_string(),
                 mime_type: Some("text/html".to_string()),
@@ -342,5 +636,96 @@ mod tests {
             .read_to_end(&mut payload)
             .unwrap();
         assert_eq!(payload, b"<b>hello</b>");
+    }
+
+    #[test]
+    fn import_rejects_non_history_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.clipvault");
+        write_test_zip(
+            &path,
+            r#"{"app":"ClipVault","type":"settings","exportVersion":1,"createdAt":1,"itemCount":0}"#,
+            "",
+        );
+
+        let repo = Repository::open(dir.path().join("clipboard.db")).unwrap();
+        let error = super::import_history(&repo, &path).unwrap_err().to_string();
+
+        assert!(error.contains("history"));
+    }
+
+    #[test]
+    fn import_history_inserts_items_and_format_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.clipvault");
+        let payload = b"<b>hello</b>".as_slice();
+        let payload_hash = crate::clipboard::formats::data_hash(payload);
+        let item = serde_json::json!({
+            "exportId": "000001",
+            "content": "hello",
+            "preview": "hello",
+            "contentType": "text",
+            "contentHash": "hash-import",
+            "createdAt": 10,
+            "lastUsedAt": 20,
+            "useCount": 3,
+            "isPinned": true,
+            "isFavorite": true,
+            "metadata": {"hasRichFormats": true},
+            "formats": [{
+                "formatName": "HTML Format",
+                "mimeType": "text/html",
+                "encoding": "binary",
+                "byteLen": 12,
+                "hash": payload_hash,
+                "path": "formats/000001-html.bin"
+            }]
+        });
+        write_test_zip_with_payloads(
+            &path,
+            r#"{"app":"ClipVault","type":"history","exportVersion":1,"createdAt":1,"itemCount":1}"#,
+            &format!("{item}\n"),
+            &[("formats/000001-html.bin", payload)],
+        );
+        let repo = Repository::open(dir.path().join("clipboard.db")).unwrap();
+
+        let result = super::import_history(&repo, &path).unwrap();
+
+        assert_eq!(result.inserted, 1);
+        let history = repo.get_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].is_favorite);
+        assert!(history[0].is_pinned);
+        assert_eq!(history[0].last_used_at, Some(20));
+        assert_eq!(history[0].use_count, 3);
+
+        let formats = repo.list_clipboard_formats(history[0].id).unwrap();
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].data, b"<b>hello</b>");
+    }
+
+    fn write_test_zip(path: &std::path::Path, manifest: &str, items: &str) {
+        write_test_zip_with_payloads(path, manifest, items, &[]);
+    }
+
+    fn write_test_zip_with_payloads(
+        path: &std::path::Path,
+        manifest: &str,
+        items: &str,
+        payloads: &[(&str, &[u8])],
+    ) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", options).unwrap();
+        zip.write_all(manifest.as_bytes()).unwrap();
+        zip.start_file("items.jsonl", options).unwrap();
+        zip.write_all(items.as_bytes()).unwrap();
+        for (path, data) in payloads {
+            zip.start_file(path, options).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
     }
 }
