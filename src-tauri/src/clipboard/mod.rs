@@ -9,6 +9,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::{
     commands::{self, AppState, HistoryRevisionPayload},
+    database::repository::Repository,
     detector::{create_preview, detect_content_type, parse_single_file_path},
     errors::{AppError, AppResult},
     events,
@@ -172,15 +173,30 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
     }
 
     if let Ok(text) = app.clipboard().read_text() {
-        if let CaptureDecision::Insert { input, hash } = build_text_insert_input(
+        match build_text_insert_input(
             &text,
             settings.text_limit_kb,
             settings.enable_sensitive_filter,
             monitor.last_hash(),
         ) {
-            let formats = read_supported_formats_for_capture();
-            insert_and_emit_with_formats(app, state, *input, hash, monitor, formats)?;
-            return Ok(());
+            CaptureDecision::Insert { input, hash } => {
+                let formats = read_supported_formats_for_capture();
+                insert_and_emit_with_formats(app, state, *input, hash, monitor, formats)?;
+                return Ok(());
+            }
+            CaptureDecision::Skip(CaptureSkipReason::Duplicate) => {
+                let formats = read_supported_formats_for_capture();
+                if !formats.is_empty() {
+                    let text = text.trim();
+                    let hash = hash_text(detect_content_type(text), text);
+                    if persist_rich_formats_for_existing_hash(state.repository(), &hash, &formats)?
+                    {
+                        emit_history_revision(app, state);
+                    }
+                    return Ok(());
+                }
+            }
+            CaptureDecision::Skip(_) => {}
         }
     }
 
@@ -258,23 +274,25 @@ fn insert_and_emit_with_formats(
     monitor: &mut ClipboardMonitor,
     formats: Vec<ClipboardFormatInput>,
 ) -> AppResult<()> {
+    if let Some(existing) = state
+        .repository()
+        .find_by_content_hash(&input.content_hash)?
+    {
+        if persist_rich_formats_for_item(state.repository(), existing.id, &formats)? {
+            emit_history_revision(app, state);
+        }
+        monitor.remember_hash(hash);
+        state.set_monitoring_last_hash(monitor.last_hash());
+        return Ok(());
+    }
+
     let format_names = formats
         .iter()
         .map(|format| format.format_name.clone())
         .collect::<Vec<_>>();
     apply_rich_format_metadata(&mut input, &format_names);
     let item = state.repository().insert_clipboard_item(input)?;
-    for format in formats {
-        if let Err(error) = state.repository().insert_clipboard_format(item.id, &format) {
-            tracing::warn!(
-                target: "clipboard",
-                area = "clipboard",
-                direction = "persist rich clipboard format payload",
-                format_name = format.format_name,
-                "failed to store rich clipboard format: {error}"
-            );
-        }
-    }
+    persist_rich_formats_for_item(state.repository(), item.id, &formats)?;
     monitor.remember_hash(hash);
     state.set_monitoring_last_hash(monitor.last_hash());
     let cursor = commands::set_quick_paste_cursor_impl(state, item.id)?;
@@ -287,6 +305,51 @@ fn insert_and_emit_with_formats(
         HistoryRevisionPayload { revision },
     );
     Ok(())
+}
+
+fn persist_rich_formats_for_existing_hash(
+    repo: &Repository,
+    content_hash: &str,
+    formats: &[ClipboardFormatInput],
+) -> AppResult<bool> {
+    let Some(item) = repo.find_by_content_hash(content_hash)? else {
+        return Ok(false);
+    };
+
+    persist_rich_formats_for_item(repo, item.id, formats)
+}
+
+fn persist_rich_formats_for_item(
+    repo: &Repository,
+    item_id: i64,
+    formats: &[ClipboardFormatInput],
+) -> AppResult<bool> {
+    if formats.is_empty() {
+        return Ok(false);
+    }
+
+    let before = repo.list_clipboard_formats(item_id)?.len();
+    for format in formats {
+        if let Err(error) = repo.insert_clipboard_format(item_id, format) {
+            tracing::warn!(
+                target: "clipboard",
+                area = "clipboard",
+                direction = "persist rich clipboard format payload",
+                format_name = format.format_name,
+                "failed to store rich clipboard format: {error}"
+            );
+        }
+    }
+
+    Ok(repo.list_clipboard_formats(item_id)?.len() > before)
+}
+
+fn emit_history_revision(app: &AppHandle, state: &AppState) {
+    let revision = state.bump_history_revision();
+    let _ = app.emit(
+        events::HISTORY_REVISION,
+        HistoryRevisionPayload { revision },
+    );
 }
 
 fn apply_rich_format_metadata(input: &mut ClipboardInsertInput, format_names: &[String]) {
@@ -381,7 +444,40 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ClipboardContentType;
+    use tempfile::tempdir;
+
+    use crate::{
+        database::repository::Repository,
+        models::{ClipboardContentType, ClipboardFormatEncoding},
+    };
+
+    fn repo() -> Repository {
+        let dir = tempdir().unwrap();
+        Repository::open(dir.path().join("clipboard.db")).unwrap()
+    }
+
+    fn text_input(content: &str, hash: &str) -> ClipboardInsertInput {
+        ClipboardInsertInput {
+            content: Some(content.to_string()),
+            content_type: ClipboardContentType::Text,
+            content_hash: hash.to_string(),
+            preview: content.to_string(),
+            metadata: None,
+            file_path: None,
+            image_data: None,
+        }
+    }
+
+    fn html_format(data: &[u8]) -> ClipboardFormatInput {
+        ClipboardFormatInput {
+            format_name: "HTML Format".to_string(),
+            format_id: Some(49323),
+            mime_type: Some("text/html".to_string()),
+            encoding: ClipboardFormatEncoding::Binary,
+            data: data.to_vec(),
+            data_hash: hash_bytes(data),
+        }
+    }
 
     #[test]
     fn text_capture_skips_empty_sensitive_too_large_and_duplicates() {
@@ -441,6 +537,30 @@ mod tests {
             metadata.extra["formatNames"],
             json!(["HTML Format", "Rich Text Format"])
         );
+    }
+
+    #[test]
+    fn duplicate_text_capture_can_backfill_late_rich_formats() {
+        let repo = repo();
+        let hash = hash_text(ClipboardContentType::Text, "#### title");
+        let item = repo
+            .insert_clipboard_item(text_input("#### title", &hash))
+            .unwrap();
+
+        let added =
+            persist_rich_formats_for_existing_hash(&repo, &hash, &[html_format(b"<h4>title</h4>")])
+                .unwrap();
+        let repeated =
+            persist_rich_formats_for_existing_hash(&repo, &hash, &[html_format(b"<h4>title</h4>")])
+                .unwrap();
+        let stored = repo.get_item_by_id(item.id).unwrap().unwrap();
+        let formats = repo.list_clipboard_formats(item.id).unwrap();
+
+        assert!(added);
+        assert!(!repeated);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(stored.metadata.extra["hasRichFormats"], json!(true));
+        assert_eq!(stored.metadata.extra["formatNames"], json!(["HTML Format"]));
     }
 
     #[test]

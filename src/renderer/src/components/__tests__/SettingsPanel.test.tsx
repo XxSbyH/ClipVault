@@ -272,6 +272,20 @@ describe('SettingsPanel', () => {
     expect(await screen.findByText(/已导出 2 条历史/)).toBeInTheDocument();
   });
 
+  it('keeps storage history action icons aligned with labels', async () => {
+    renderPanel('storage');
+
+    const exportButton = await screen.findByRole('button', { name: '导出历史' });
+    const importButton = await screen.findByRole('button', { name: '导入历史' });
+
+    expect(exportButton).toHaveClass('gap-2');
+    expect(exportButton).toHaveClass('leading-none');
+    expect(exportButton.querySelector('svg')).toHaveClass('block');
+    expect(importButton).toHaveClass('gap-2');
+    expect(importButton).toHaveClass('leading-none');
+    expect(importButton.querySelector('svg')).toHaveClass('block');
+  });
+
   it('imports history and shows merge summary', async () => {
     openDialogMock.mockResolvedValue('D:/tmp/history.clipvault');
     importHistoryMock.mockResolvedValue({

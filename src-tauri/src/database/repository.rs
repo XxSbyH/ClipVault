@@ -45,10 +45,6 @@ impl Repository {
     pub fn insert_clipboard_item(&self, input: ClipboardInsertInput) -> AppResult<ClipboardItem> {
         let conn = self.conn()?;
         if let Some(existing) = self.get_item_by_hash_locked(&conn, &input.content_hash)? {
-            conn.execute(
-                "UPDATE clipboard_items SET created_at = ?1 WHERE id = ?2",
-                params![now_timestamp(), existing.id],
-            )?;
             return self.get_item_locked(&conn, existing.id);
         }
 
@@ -1140,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_clipboard_item_and_return_existing_duplicate() {
+    fn insert_clipboard_item_returns_existing_duplicate_without_reordering_history() {
         let repo = repo();
 
         let first = repo
@@ -1159,9 +1155,9 @@ mod tests {
 
         assert_eq!(first.id, duplicate.id);
         assert_eq!(duplicate.content.as_deref(), Some("hello"));
-        assert!(
-            duplicate.created_at > 100,
-            "duplicate captures should refresh the existing item timestamp"
+        assert_eq!(
+            duplicate.created_at, 100,
+            "duplicate captures should not reorder existing history items"
         );
         assert_eq!(repo.get_item_by_id(first.id).unwrap().unwrap().id, first.id);
         assert_eq!(repo.count_items().unwrap(), 1);

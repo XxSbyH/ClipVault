@@ -1228,24 +1228,26 @@ export function SettingsPanel({
                 <Button
                   type="button"
                   variant="outline"
+                  className="gap-2 leading-none"
                   disabled={historyTransferBusy}
                   onClick={() => {
                     void handleExportHistory();
                   }}
                 >
-                  <Download className="mr-2 h-4 w-4" />
-                  {historyTransferBusy ? '处理中...' : '导出历史'}
+                  <Download className="block h-4 w-4 shrink-0" />
+                  <span className="leading-none">{historyTransferBusy ? '处理中...' : '导出历史'}</span>
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
+                  className="gap-2 leading-none"
                   disabled={historyTransferBusy}
                   onClick={() => {
                     void handleImportHistory();
                   }}
                 >
-                  <Upload className="mr-2 h-4 w-4" />
-                  {historyTransferBusy ? '处理中...' : '导入历史'}
+                  <Upload className="block h-4 w-4 shrink-0" />
+                  <span className="leading-none">{historyTransferBusy ? '处理中...' : '导入历史'}</span>
                 </Button>
               </div>
               {historyTransferStatus ? (
