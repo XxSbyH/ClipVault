@@ -136,7 +136,7 @@ pub fn run() {
                         "check Windows user profile path and app data permissions",
                         &error,
                     );
-                    return Err(Box::new(errors::AppError::from(error)));
+                    return Err(Box::new(error));
                 }
             };
 
@@ -180,7 +180,7 @@ pub fn run() {
                         "check database lock/corruption, migration failure, or antivirus file lock",
                         &error,
                     );
-                    return Err(Box::new(errors::AppError::from(error)));
+                    return Err(Box::new(error));
                 }
             };
 
