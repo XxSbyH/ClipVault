@@ -27,33 +27,317 @@ fn health_check() -> &'static str {
 }
 
 pub fn run() {
-    logger::init();
+    let init = logger::init();
+    logger::startup_ok(
+        "logger_init",
+        "filesystem",
+        "startup and runtime log files initialized",
+        format!(
+            "startup_log={} runtime_log={}",
+            init.startup_log_path.display(),
+            init.runtime_log_path.display()
+        ),
+    );
+    logger::startup_info(
+        "tauri_builder",
+        "tauri",
+        "building Tauri application and registering plugins",
+        "builder_start",
+    );
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if autostart::should_show_main_window_for_args(args) {
-                let _ = windows::show_main_window(app);
+    let builder = tauri::Builder::default();
+    logger::startup_info(
+        "single_instance_plugin",
+        "tauri_plugin",
+        "register single-instance plugin; stale instance detection can affect startup",
+        "register_start",
+    );
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        logger::startup_info(
+            "single_instance_callback",
+            "tauri_plugin",
+            "second instance callback reached; existing window should be focused when requested",
+            format!("args_count={}", args.len()),
+        );
+        if autostart::should_show_main_window_for_args(args) {
+            match windows::show_main_window(app) {
+                Ok(()) => logger::startup_ok(
+                    "single_instance_focus",
+                    "tauri_plugin",
+                    "existing main window focused for second instance",
+                    "show_main_window_ok",
+                ),
+                Err(error) => logger::startup_error(
+                    "single_instance_focus",
+                    "tauri_plugin",
+                    "check existing window state or WebView2 window focus handling",
+                    error,
+                ),
             }
-        }))
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
-            fs::create_dir_all(&app_data_dir)?;
-            let repository = Repository::open(app_data_dir.join("clipboard.db"))?;
+        }
+    }));
+    logger::startup_ok(
+        "single_instance_plugin",
+        "tauri_plugin",
+        "single-instance plugin registered",
+        "register_ok",
+    );
+    logger::startup_info(
+        "global_shortcut_plugin",
+        "tauri_plugin",
+        "register global shortcut plugin; Windows shortcut subsystem required",
+        "register_start",
+    );
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    logger::startup_ok(
+        "global_shortcut_plugin",
+        "tauri_plugin",
+        "global shortcut plugin registered",
+        "register_ok",
+    );
+    logger::startup_info(
+        "clipboard_plugin",
+        "tauri_plugin",
+        "register clipboard manager plugin; Windows clipboard API required",
+        "register_start",
+    );
+    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    logger::startup_ok(
+        "clipboard_plugin",
+        "tauri_plugin",
+        "clipboard manager plugin registered",
+        "register_ok",
+    );
+
+    let result = builder
+        .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
+            logger::startup_ok(
+                "setup_start",
+                "tauri",
+                "Tauri setup lifecycle reached",
+                "setup_entered",
+            );
+
+            let app_data_dir = match app.path().app_data_dir() {
+                Ok(path) => {
+                    logger::startup_ok(
+                        "app_data_dir",
+                        "filesystem",
+                        "Tauri app data directory resolved",
+                        path.display().to_string(),
+                    );
+                    logger::note_tauri_app_data_dir(&path);
+                    path
+                }
+                Err(error) => {
+                    logger::startup_error(
+                        "app_data_dir",
+                        "filesystem",
+                        "check Windows user profile path and app data permissions",
+                        &error,
+                    );
+                    return Err(Box::new(errors::AppError::from(error)));
+                }
+            };
+
+            if let Err(error) = fs::create_dir_all(&app_data_dir) {
+                logger::startup_error(
+                    "app_data_dir_create",
+                    "filesystem",
+                    "check app data directory permissions or locked profile state",
+                    &error,
+                );
+                return Err(Box::new(error));
+            }
+            logger::startup_ok(
+                "app_data_dir_create",
+                "filesystem",
+                "app data directory exists",
+                app_data_dir.display().to_string(),
+            );
+
+            let database_path = app_data_dir.join("clipboard.db");
+            logger::startup_info(
+                "database_open",
+                "sqlite",
+                "open SQLite database; failures point to lock, corruption, migration, or antivirus file lock",
+                database_path.display().to_string(),
+            );
+            let repository = match Repository::open(&database_path) {
+                Ok(repository) => {
+                    logger::startup_ok(
+                        "database_open",
+                        "sqlite",
+                        "SQLite database opened and migrations completed",
+                        database_path.display().to_string(),
+                    );
+                    repository
+                }
+                Err(error) => {
+                    logger::startup_error(
+                        "database_open",
+                        "sqlite",
+                        "check database lock/corruption, migration failure, or antivirus file lock",
+                        &error,
+                    );
+                    return Err(Box::new(errors::AppError::from(error)));
+                }
+            };
+
             let state = commands::AppState::new(repository);
-            let settings = state.repository().get_settings()?;
+            let settings = match state.repository().get_settings() {
+                Ok(settings) => {
+                    logger::startup_ok(
+                        "settings_load",
+                        "sqlite",
+                        "settings loaded without logging sensitive values",
+                        format!("launch_on_startup={}", settings.launch_on_startup),
+                    );
+                    settings
+                }
+                Err(error) => {
+                    logger::startup_error(
+                        "settings_load",
+                        "sqlite",
+                        "check settings JSON row or database integrity",
+                        &error,
+                    );
+                    return Err(Box::new(error));
+                }
+            };
+
             if settings.launch_on_startup {
-                autostart::sync_launch_on_startup(true)?;
+                logger::startup_info(
+                    "autostart_sync",
+                    "autostart",
+                    "sync Windows autostart registry entry because setting is enabled",
+                    "enabled=true",
+                );
+                if let Err(error) = autostart::sync_launch_on_startup(true) {
+                    logger::startup_error(
+                        "autostart_sync",
+                        "autostart",
+                        "check Windows registry permission or startup entry path",
+                        &error,
+                    );
+                    return Err(Box::new(errors::AppError::from(error)));
+                }
+                logger::startup_ok(
+                    "autostart_sync",
+                    "autostart",
+                    "Windows autostart entry synchronized",
+                    "enabled=true",
+                );
+            } else {
+                logger::startup_info(
+                    "autostart_sync",
+                    "autostart",
+                    "autostart setting disabled; registry sync skipped",
+                    "enabled=false",
+                );
             }
+
             clipboard::start_monitoring(app.handle().clone(), state.clone());
+            logger::startup_ok(
+                "clipboard_monitor",
+                "clipboard",
+                "clipboard monitor task started; Windows clipboard API required",
+                "started",
+            );
+
             app.manage(state);
-            windows::configure_windows(app.handle())?;
-            tray::create_tray(app.handle())?;
-            hotkeys::register_global_shortcuts(app.handle())?;
-            if autostart::should_show_main_window_for_env_args() {
-                windows::show_main_window(app.handle())?;
+            logger::startup_ok(
+                "app_state",
+                "tauri",
+                "application state registered",
+                "managed",
+            );
+
+            if let Err(error) = windows::configure_windows(app.handle()) {
+                logger::startup_error(
+                    "window_config",
+                    "webview2",
+                    "check Microsoft Edge WebView2 Runtime, window labels, or packaged frontend files",
+                    &error,
+                );
+                return Err(Box::new(error));
             }
+            logger::startup_ok(
+                "window_config",
+                "webview2",
+                "Tauri windows configured; WebView2 runtime dependency reached",
+                "labels=main,hud,search",
+            );
+
+            if let Err(error) = tray::create_tray(app.handle()) {
+                logger::startup_error(
+                    "tray_create",
+                    "tray",
+                    "check Windows shell tray availability and packaged icon resources",
+                    &error,
+                );
+                return Err(Box::new(error));
+            }
+            logger::startup_ok(
+                "tray_create",
+                "tray",
+                "Windows tray menu created",
+                "created",
+            );
+
+            if let Err(error) = hotkeys::register_global_shortcuts(app.handle()) {
+                logger::startup_error(
+                    "hotkey_register",
+                    "hotkey",
+                    "check global hotkey conflicts, Windows hook permissions, or input subsystem",
+                    &error,
+                );
+                return Err(Box::new(error));
+            }
+            logger::startup_ok(
+                "hotkey_register",
+                "hotkey",
+                "global shortcuts registered",
+                "registered",
+            );
+
+            if autostart::should_show_main_window_for_env_args() {
+                logger::startup_info(
+                    "main_window_show",
+                    "webview2",
+                    "startup arguments request showing the main window",
+                    "show_requested=true",
+                );
+                if let Err(error) = windows::show_main_window(app.handle()) {
+                    logger::startup_error(
+                        "main_window_show",
+                        "webview2",
+                        "check window visibility/focus handling or WebView2 runtime",
+                        &error,
+                    );
+                    return Err(Box::new(error));
+                }
+                logger::startup_ok(
+                    "main_window_show",
+                    "webview2",
+                    "main window show request completed",
+                    "shown",
+                );
+            } else {
+                logger::startup_info(
+                    "main_window_show",
+                    "webview2",
+                    "startup arguments do not request showing the main window",
+                    "show_requested=false",
+                );
+            }
+
+            logger::startup_ok(
+                "setup_complete",
+                "tauri",
+                "Tauri setup completed",
+                "setup_ok",
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -92,6 +376,23 @@ pub fn run() {
             commands::test_monitoring,
             commands::test_hud
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    match result {
+        Ok(()) => logger::startup_ok(
+            "tauri_run",
+            "tauri",
+            "Tauri event loop exited normally",
+            "run_ok",
+        ),
+        Err(error) => {
+            logger::startup_error(
+                "tauri_run",
+                "tauri",
+                "check Tauri runtime, WebView2 runtime, plugin setup, or packaged frontend files",
+                &error,
+            );
+            panic!("error while running tauri application: {error}");
+        }
+    }
 }
