@@ -6,6 +6,7 @@ pub mod database;
 pub mod detector;
 pub mod errors;
 pub mod events;
+pub mod history_export;
 pub mod hotkeys;
 pub mod logger;
 pub mod models;
