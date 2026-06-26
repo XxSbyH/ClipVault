@@ -109,6 +109,19 @@ pub fn run() {
         "clipboard manager plugin registered",
         "register_ok",
     );
+    logger::startup_info(
+        "dialog_plugin",
+        "tauri_plugin",
+        "register dialog plugin for history import and export file selection",
+        "register_start",
+    );
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+    logger::startup_ok(
+        "dialog_plugin",
+        "tauri_plugin",
+        "dialog plugin registered",
+        "register_ok",
+    );
 
     let result = builder
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
@@ -370,6 +383,8 @@ pub fn run() {
             commands::check_hotkey_available,
             commands::update_hotkeys,
             commands::clear_history,
+            commands::export_history,
+            commands::import_history,
             commands::toggle_monitoring,
             commands::minimize_window,
             commands::hide_window,

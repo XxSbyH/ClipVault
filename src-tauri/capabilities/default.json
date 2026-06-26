@@ -9,6 +9,7 @@
   ],
   "permissions": [
     "core:default",
+    "dialog:default",
     "allow-task4-commands"
   ]
 }

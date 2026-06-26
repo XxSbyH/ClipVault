@@ -58,6 +58,19 @@ export interface ClipboardFormatSummary {
   dataHash: string;
 }
 
+export interface HistoryExportResult {
+  exported: number;
+  path: string;
+}
+
+export interface HistoryImportResult {
+  inserted: number;
+  skippedDuplicates: number;
+  mergedState: number;
+  skippedUnsupportedFormats: number;
+  failed: number;
+}
+
 export interface AppSettings {
   retentionDays: number;
   maxItems: number;
@@ -195,6 +208,8 @@ export interface ClipboardApi {
   updateFixedContent: (id: number, input: FixedContentInput) => Promise<FixedContent>;
   deleteFixedContent: (id: number) => Promise<void>;
   clearHistory: () => Promise<{ success: boolean; deleted: number; error?: string }>;
+  exportHistory: (path: string) => Promise<HistoryExportResult>;
+  importHistory: (path: string) => Promise<HistoryImportResult>;
   toggleMonitoring: () => Promise<boolean>;
   minimizeWindow: () => Promise<void>;
   hideWindow: () => Promise<void>;

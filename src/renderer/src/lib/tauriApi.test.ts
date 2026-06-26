@@ -195,6 +195,38 @@ describe('clipboardApi Tauri adapter', () => {
     expect(invokeMock).toHaveBeenCalledWith('clear_history', { includeFavorites: false });
   });
 
+  it('invokes history export and import commands', async () => {
+    const { clipboardApi } = await import('./tauriApi');
+    invokeMock
+      .mockResolvedValueOnce({ exported: 2, path: 'D:/tmp/history.clipvault' })
+      .mockResolvedValueOnce({
+        inserted: 1,
+        skippedDuplicates: 2,
+        mergedState: 1,
+        skippedUnsupportedFormats: 0,
+        failed: 0
+      });
+
+    await expect(clipboardApi.exportHistory('D:/tmp/history.clipvault')).resolves.toEqual({
+      exported: 2,
+      path: 'D:/tmp/history.clipvault'
+    });
+    await expect(clipboardApi.importHistory('D:/tmp/history.clipvault')).resolves.toEqual({
+      inserted: 1,
+      skippedDuplicates: 2,
+      mergedState: 1,
+      skippedUnsupportedFormats: 0,
+      failed: 0
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith('export_history', {
+      path: 'D:/tmp/history.clipvault'
+    });
+    expect(invokeMock).toHaveBeenCalledWith('import_history', {
+      path: 'D:/tmp/history.clipvault'
+    });
+  });
+
   it('returns the newest matching custom blacklist app when command returns a full list', async () => {
     const { clipboardApi } = await import('./tauriApi');
     const apps: BlacklistApp[] = [

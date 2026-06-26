@@ -30,6 +30,8 @@ commands.allow = [
   "check_hotkey_available",
   "update_hotkeys",
   "clear_history",
+  "export_history",
+  "import_history",
   "toggle_monitoring",
   "minimize_window",
   "hide_window",

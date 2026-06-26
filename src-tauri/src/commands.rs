@@ -19,7 +19,7 @@ use crate::{
     clipboard::{self, CaptureDecision, CaptureSkipReason, ClipboardMonitor},
     database::repository::Repository,
     errors::{AppError, AppResult},
-    events,
+    events, history_export,
     hotkeys::{self, QuickPasteCursor, QuickPasteCursorSnapshot},
     models::{
         AppSettings, BlacklistApp, ClipboardContentType, ClipboardInsertInput, ClipboardItem,
@@ -635,6 +635,24 @@ pub fn clear_history_impl(
         state.history_revision()
     };
     Ok(ClearHistoryResult { revision, deleted })
+}
+
+pub fn export_history_impl(
+    state: &AppState,
+    path: String,
+) -> AppResult<history_export::HistoryExportResult> {
+    history_export::export_history(state.repository(), std::path::Path::new(&path))
+}
+
+pub fn import_history_impl(
+    state: &AppState,
+    path: String,
+) -> AppResult<history_export::HistoryImportResult> {
+    let result = history_export::import_history(state.repository(), std::path::Path::new(&path))?;
+    if result.inserted > 0 || result.merged_state > 0 {
+        state.bump_history_revision();
+    }
+    Ok(result)
 }
 
 pub fn toggle_monitoring_impl(state: &AppState) -> MonitoringStatus {
@@ -1285,6 +1303,29 @@ pub fn clear_history(
     let result = clear_history_impl(state.inner(), include_favorites)?;
     if result.deleted > 0 {
         emit_history_revision(&app, result.revision);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn export_history(
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<history_export::HistoryExportResult> {
+    export_history_impl(state.inner(), path)
+}
+
+#[tauri::command]
+pub fn import_history(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<history_export::HistoryImportResult> {
+    let before_revision = state.history_revision();
+    let result = import_history_impl(state.inner(), path)?;
+    let after_revision = state.history_revision();
+    if after_revision != before_revision {
+        emit_history_revision(&app, after_revision);
     }
     Ok(result)
 }

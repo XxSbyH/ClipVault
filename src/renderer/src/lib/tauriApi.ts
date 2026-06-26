@@ -7,6 +7,8 @@ import type {
   ClipboardItem,
   FixedContent,
   FixedContentInput,
+  HistoryExportResult,
+  HistoryImportResult,
   HotkeySettings,
   HudPayload,
   MonitoringStatus,
@@ -210,6 +212,12 @@ export const clipboardApi: ClipboardApi = {
     } catch (error) {
       return { success: false, deleted: 0, error: errorMessage(error) };
     }
+  },
+  exportHistory(path) {
+    return invoke<HistoryExportResult>('export_history', { path });
+  },
+  importHistory(path) {
+    return invoke<HistoryImportResult>('import_history', { path });
   },
   async toggleMonitoring() {
     const status = await invoke<MonitoringStatus>('toggle_monitoring');
