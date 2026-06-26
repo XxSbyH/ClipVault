@@ -90,6 +90,40 @@ pub struct ClipboardInsertInput {
     pub image_data: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipboardFormatEncoding {
+    Utf8,
+    Utf16Le,
+    Binary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFormatPayload {
+    pub id: i64,
+    pub item_id: i64,
+    pub format_name: String,
+    pub format_id: Option<u32>,
+    pub mime_type: Option<String>,
+    pub encoding: ClipboardFormatEncoding,
+    pub data: Vec<u8>,
+    pub byte_len: i64,
+    pub data_hash: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFormatInput {
+    pub format_name: String,
+    pub format_id: Option<u32>,
+    pub mime_type: Option<String>,
+    pub encoding: ClipboardFormatEncoding,
+    pub data: Vec<u8>,
+    pub data_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FixedContent {
@@ -378,6 +412,32 @@ mod tests {
         assert_eq!(value["isPinned"], json!(false));
         assert_eq!(value["isFavorite"], json!(false));
         assert!(value.get("content_type").is_none());
+    }
+
+    #[test]
+    fn serializes_clipboard_format_payload_as_camel_case() {
+        let payload = ClipboardFormatPayload {
+            id: 7,
+            item_id: 3,
+            format_name: "HTML Format".to_string(),
+            format_id: Some(49323),
+            mime_type: Some("text/html".to_string()),
+            encoding: ClipboardFormatEncoding::Binary,
+            data: vec![1, 2, 3],
+            byte_len: 3,
+            data_hash: "hash".to_string(),
+            created_at: 1_780_000_000,
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+
+        assert_eq!(value["itemId"], json!(3));
+        assert_eq!(value["formatName"], json!("HTML Format"));
+        assert_eq!(value["formatId"], json!(49323));
+        assert_eq!(value["mimeType"], json!("text/html"));
+        assert_eq!(value["encoding"], json!("binary"));
+        assert_eq!(value["byteLen"], json!(3));
+        assert!(value.get("item_id").is_none());
     }
 
     #[test]

@@ -12,7 +12,8 @@ use crate::database::migrations::{configure_connection, init_database};
 use crate::{
     errors::AppResult,
     models::{
-        AppSettings, BlacklistApp, ClipboardContentType, ClipboardInsertInput, ClipboardItem,
+        AppSettings, BlacklistApp, ClipboardContentType, ClipboardFormatEncoding,
+        ClipboardFormatInput, ClipboardFormatPayload, ClipboardInsertInput, ClipboardItem,
         ClipboardMetadata, FixedContent, FixedContentInput, HotkeySettings, HotkeySettingsPatch,
         ImageCompression, ThemeMode, WheelShortcutModifier, WheelShortcutScope,
     },
@@ -71,6 +72,55 @@ impl Repository {
 
         let id = conn.last_insert_rowid();
         self.get_item_locked(&conn, id)
+    }
+
+    pub fn insert_clipboard_format(
+        &self,
+        item_id: i64,
+        input: &ClipboardFormatInput,
+    ) -> AppResult<ClipboardFormatPayload> {
+        {
+            let mut conn = self.conn()?;
+            let tx = conn.transaction()?;
+            let format_id = input.format_id.map(i64::from);
+            tx.execute(
+                "INSERT OR IGNORE INTO clipboard_formats
+                 (item_id, format_name, format_id, mime_type, encoding, data, byte_len, data_hash, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    item_id,
+                    input.format_name.as_str(),
+                    format_id,
+                    input.mime_type.as_deref(),
+                    format_encoding_to_db(input.encoding),
+                    input.data.as_slice(),
+                    input.data.len() as i64,
+                    input.data_hash.as_str(),
+                    now_timestamp(),
+                ],
+            )?;
+            sync_rich_format_metadata(&tx, item_id)?;
+            tx.commit()?;
+        }
+
+        self.list_clipboard_formats(item_id)?
+            .into_iter()
+            .find(|payload| {
+                payload.format_name == input.format_name && payload.data_hash == input.data_hash
+            })
+            .ok_or_else(|| "inserted clipboard format was not found".into())
+    }
+
+    pub fn list_clipboard_formats(&self, item_id: i64) -> AppResult<Vec<ClipboardFormatPayload>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, item_id, format_name, format_id, mime_type, encoding, data, byte_len, data_hash, created_at
+             FROM clipboard_formats
+             WHERE item_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![item_id], map_clipboard_format)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn get_item_by_id(&self, id: i64) -> AppResult<Option<ClipboardItem>> {
@@ -629,6 +679,53 @@ where
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+fn sync_rich_format_metadata(tx: &rusqlite::Transaction<'_>, item_id: i64) -> AppResult<()> {
+    let metadata_json = tx
+        .query_row(
+            "SELECT metadata FROM clipboard_items WHERE id = ?1",
+            params![item_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+        .unwrap_or_else(|| "{}".to_string());
+    let mut metadata =
+        serde_json::from_str::<ClipboardMetadata>(&metadata_json).unwrap_or_default();
+    let format_names = {
+        let mut stmt = tx.prepare(
+            "SELECT format_name
+             FROM clipboard_formats
+             WHERE item_id = ?1
+             GROUP BY format_name
+             ORDER BY MIN(id) ASC",
+        )?;
+        let rows = stmt.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    if format_names.is_empty() {
+        return Ok(());
+    }
+
+    let format_count = format_names.len();
+    metadata
+        .extra
+        .insert("hasRichFormats".to_string(), serde_json::json!(true));
+    metadata
+        .extra
+        .insert("formatNames".to_string(), serde_json::json!(format_names));
+    metadata
+        .extra
+        .insert("formatCount".to_string(), serde_json::json!(format_count));
+
+    let serialized = serde_json::to_string(&metadata)?;
+    tx.execute(
+        "UPDATE clipboard_items SET metadata = ?2 WHERE id = ?1",
+        params![item_id, serialized],
+    )?;
+    Ok(())
+}
+
 fn serialize_setting_value(key: &str, value: Value) -> AppResult<String> {
     match key {
         "retentionDays" => serialize_typed_setting::<u32>(key, value),
@@ -812,6 +909,26 @@ fn map_clipboard_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem
     })
 }
 
+fn map_clipboard_format(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardFormatPayload> {
+    let encoding: String = row.get("encoding")?;
+    let format_id = row
+        .get::<_, Option<i64>>("format_id")?
+        .and_then(|value| u32::try_from(value).ok());
+
+    Ok(ClipboardFormatPayload {
+        id: row.get("id")?,
+        item_id: row.get("item_id")?,
+        format_name: row.get("format_name")?,
+        format_id,
+        mime_type: row.get("mime_type")?,
+        encoding: format_encoding_from_db(&encoding),
+        data: row.get("data")?,
+        byte_len: row.get("byte_len")?,
+        data_hash: row.get("data_hash")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
 fn map_fixed_content(row: &rusqlite::Row<'_>) -> rusqlite::Result<FixedContent> {
     Ok(FixedContent {
         id: row.get("id")?,
@@ -843,6 +960,22 @@ fn bool_to_db(value: bool) -> i64 {
         1
     } else {
         0
+    }
+}
+
+fn format_encoding_to_db(encoding: ClipboardFormatEncoding) -> &'static str {
+    match encoding {
+        ClipboardFormatEncoding::Utf8 => "utf8",
+        ClipboardFormatEncoding::Utf16Le => "utf16le",
+        ClipboardFormatEncoding::Binary => "binary",
+    }
+}
+
+fn format_encoding_from_db(value: &str) -> ClipboardFormatEncoding {
+    match value {
+        "utf8" => ClipboardFormatEncoding::Utf8,
+        "utf16le" => ClipboardFormatEncoding::Utf16Le,
+        _ => ClipboardFormatEncoding::Binary,
     }
 }
 
@@ -884,8 +1017,9 @@ mod tests {
     use serde_json::json;
 
     use crate::models::{
-        AppSettings, ClipboardContentType, ClipboardInsertInput, ClipboardMetadata,
-        FixedContentInput, HotkeySettingsPatch, ImageCompression, ThemeMode,
+        AppSettings, ClipboardContentType, ClipboardFormatEncoding, ClipboardFormatInput,
+        ClipboardInsertInput, ClipboardMetadata, FixedContentInput, HotkeySettingsPatch,
+        ImageCompression, ThemeMode,
     };
 
     use super::Repository;
@@ -1036,6 +1170,39 @@ mod tests {
 
         assert_eq!(summary.image_data, None);
         assert_eq!(detail.image_data, Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn history_summary_does_not_load_clipboard_format_blobs() {
+        let repo = repo();
+        let item = repo
+            .insert_clipboard_item(text_input("hello", "hash-hello"))
+            .unwrap();
+        repo.insert_clipboard_format(
+            item.id,
+            &ClipboardFormatInput {
+                format_name: "HTML Format".to_string(),
+                format_id: Some(49323),
+                mime_type: Some("text/html".to_string()),
+                encoding: ClipboardFormatEncoding::Binary,
+                data: vec![1; 1024],
+                data_hash: "format-hash".to_string(),
+            },
+        )
+        .unwrap();
+
+        let history = repo.get_history(10).unwrap();
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].metadata.extra.get("hasRichFormats"),
+            Some(&json!(true))
+        );
+        assert_eq!(history[0].image_data, None);
+
+        let formats = repo.list_clipboard_formats(item.id).unwrap();
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].data.len(), 1024);
     }
 
     #[test]

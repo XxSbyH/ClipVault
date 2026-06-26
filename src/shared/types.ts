@@ -48,6 +48,16 @@ export interface ClipboardInsertInput {
   imageData?: Uint8Array | null;
 }
 
+export type ClipboardFormatEncoding = 'utf8' | 'utf16le' | 'binary';
+
+export interface ClipboardFormatSummary {
+  formatName: string;
+  mimeType?: string | null;
+  encoding: ClipboardFormatEncoding;
+  byteLen: number;
+  dataHash: string;
+}
+
 export interface AppSettings {
   retentionDays: number;
   maxItems: number;

@@ -16,6 +16,7 @@ pub fn init_database(path: impl AsRef<Path>) -> AppResult<()> {
 
 pub(crate) fn configure_connection(conn: &Connection) -> AppResult<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     Ok(())
@@ -164,6 +165,7 @@ mod tests {
         let conn = Connection::open(&db_path).unwrap();
         for table in [
             "clipboard_items",
+            "clipboard_formats",
             "settings",
             "app_blacklist",
             "fixed_contents",
@@ -283,6 +285,41 @@ mod tests {
                 "missing trigger {trigger}"
             );
         }
+    }
+
+    #[test]
+    fn clipboard_formats_cascade_when_history_item_is_deleted() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("clipboard.db");
+        init_database(&db_path).unwrap();
+
+        let conn = Connection::open(&db_path).unwrap();
+        super::configure_connection(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO clipboard_items
+             (content, content_type, content_hash, preview, metadata, created_at)
+             VALUES ('hello', 'text', 'hash-hello', 'hello', '{}', 1)",
+            [],
+        )
+        .unwrap();
+        let item_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO clipboard_formats
+             (item_id, format_name, format_id, mime_type, encoding, data, byte_len, data_hash, created_at)
+             VALUES (?1, 'HTML Format', 49323, 'text/html', 'binary', X'010203', 3, 'hash-format', 1)",
+            [item_id],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM clipboard_items WHERE id = ?1", [item_id])
+            .unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clipboard_formats", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

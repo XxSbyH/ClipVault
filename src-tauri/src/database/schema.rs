@@ -1,4 +1,5 @@
 pub const CLIPBOARD_ITEMS_TABLE: &str = "clipboard_items";
+pub const CLIPBOARD_FORMATS_TABLE: &str = "clipboard_formats";
 pub const SETTINGS_TABLE: &str = "settings";
 pub const APP_BLACKLIST_TABLE: &str = "app_blacklist";
 pub const FIXED_CONTENTS_TABLE: &str = "fixed_contents";
@@ -26,6 +27,26 @@ CREATE INDEX IF NOT EXISTS idx_content_type ON clipboard_items(content_type);
 CREATE INDEX IF NOT EXISTS idx_is_pinned ON clipboard_items(is_pinned);
 CREATE INDEX IF NOT EXISTS idx_is_favorite ON clipboard_items(is_favorite);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_content_hash_unique ON clipboard_items(content_hash);
+
+CREATE TABLE IF NOT EXISTS clipboard_formats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER NOT NULL,
+  format_name TEXT NOT NULL,
+  format_id INTEGER,
+  mime_type TEXT,
+  encoding TEXT NOT NULL,
+  data BLOB NOT NULL,
+  byte_len INTEGER NOT NULL,
+  data_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(item_id) REFERENCES clipboard_items(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_clipboard_formats_item_id
+ON clipboard_formats(item_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clipboard_formats_item_format_hash
+ON clipboard_formats(item_id, format_name, data_hash);
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
