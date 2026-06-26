@@ -1442,7 +1442,12 @@ fn restore_wheel_hook(app: &AppHandle, settings: &AppSettings) {
         app,
         hotkeys::WheelHookOptions::from_settings(settings),
     ) {
-        tracing::error!(target: "hotkeys", "failed to restore previous wheel hook: {error}");
+        tracing::error!(
+            target: "hotkeys",
+            area = "hotkey",
+            direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
+            "failed to restore previous wheel hook: {error}"
+        );
     }
 }
 

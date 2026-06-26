@@ -234,12 +234,16 @@ pub fn register_global_shortcuts(app: &AppHandle) -> AppResult<()> {
     if let Err(error) = start_wheel_hook(app) {
         tracing::warn!(
             target: "hotkeys",
+            area = "hotkey",
+            direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
             "wheel shortcut hook failed to start; keyboard quick paste remains available: {error}"
         );
     }
     if let Err(error) = start_cut_capture_hook(app) {
         tracing::warn!(
             target: "hotkeys",
+            area = "clipboard",
+            direction = "check clipboard access after cut operation or foreground app focus",
             "cut capture hook failed to start; clipboard polling remains available: {error}"
         );
     }
@@ -509,7 +513,12 @@ fn handle_hotkey_action(app: &AppHandle, action: HotkeyAction) {
         }
         HotkeyAction::FixedContent(id) => {
             if let Err(error) = paste_fixed_content(app, id) {
-                tracing::warn!(target: "hotkeys", "fixed content paste failed: {error}");
+                tracing::warn!(
+                    target: "hotkeys",
+                    area = "hotkey",
+                    direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
+                    "fixed content paste failed: {error}"
+                );
             }
         }
     }
@@ -628,7 +637,13 @@ fn quick_copy(app: &AppHandle, direction: QuickPasteDirection) -> AppResult<()> 
                 commands::emit_hud_notification(app, payload);
                 emit_quick_paste_cursor(app, result.item.as_ref().map(|item| item.id), None);
             } else if !result.success {
-                tracing::warn!(target: "hotkeys", "quick copy failed: {}", result.message);
+                tracing::warn!(
+                    target: "hotkeys",
+                    area = "hotkey",
+                    direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
+                    "quick copy failed: {}",
+                    result.message
+                );
             }
 
             if result.success {
@@ -892,7 +907,12 @@ mod wheel {
         if should_trigger {
             thread::spawn(move || {
                 if let Err(error) = quick_copy(&app, direction) {
-                    tracing::warn!(target: "hotkeys", "wheel quick copy failed: {error}");
+                    tracing::warn!(
+                        target: "hotkeys",
+                        area = "hotkey",
+                        direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
+                        "wheel quick copy failed: {error}"
+                    );
                 }
             });
         }
@@ -924,6 +944,8 @@ mod wheel {
         if options.enabled {
             tracing::warn!(
                 target: "hotkeys",
+                area = "hotkey",
+                direction = "wheel shortcuts require Windows low-level mouse hook support",
                 "wheel shortcuts are only supported on Windows; keyboard quick paste remains available"
             );
         }
@@ -1121,7 +1143,12 @@ mod keyboard_capture {
             };
             let state = state.inner().clone();
             if let Err(error) = crate::clipboard::capture_clipboard_now(&app, &state) {
-                tracing::warn!(target: "clipboard", "cut clipboard capture failed: {error}");
+                tracing::warn!(
+                    target: "clipboard",
+                    area = "clipboard",
+                    direction = "check clipboard access after cut operation or foreground app focus",
+                    "cut clipboard capture failed: {error}"
+                );
             }
         });
     }

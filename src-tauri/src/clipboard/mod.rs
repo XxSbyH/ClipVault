@@ -65,7 +65,12 @@ pub fn start_monitoring(app: AppHandle, state: AppState) {
 
             state.set_monitoring_running(true);
             if let Err(error) = tick_with_shared_monitor(&app, &state) {
-                tracing::warn!(target: "clipboard", "clipboard monitor tick failed: {error}");
+                tracing::warn!(
+                    target: "clipboard",
+                    area = "clipboard",
+                    direction = "check Windows clipboard access or foreground app interaction",
+                    "clipboard monitor tick failed: {error}"
+                );
             }
             state.set_monitoring_running(false);
         }
