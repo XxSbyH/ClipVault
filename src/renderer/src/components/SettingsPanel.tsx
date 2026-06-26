@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Monitor, Moon, SlidersHorizontal, Sun, X } from 'lucide-react';
+import { Download, Monitor, Moon, SlidersHorizontal, Sun, Upload, X } from 'lucide-react';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import {
   DEFAULT_HOTKEYS,
   type AppSettings,
@@ -316,6 +317,8 @@ export function SettingsPanel({
   const [errorMessage, setErrorMessage] = useState('');
   const [clearState, setClearState] = useState<'idle' | 'clearing' | 'success' | 'error'>('idle');
   const [clearMessage, setClearMessage] = useState('');
+  const [historyTransferStatus, setHistoryTransferStatus] = useState<string | null>(null);
+  const [historyTransferBusy, setHistoryTransferBusy] = useState(false);
   const [maxItemsDraft, setMaxItemsDraft] = useState('10000');
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const candidateComboRef = useRef('');
@@ -370,6 +373,8 @@ export function SettingsPanel({
       setErrorMessage('');
       setClearState('idle');
       setClearMessage('');
+      setHistoryTransferStatus(null);
+      setHistoryTransferBusy(false);
       return;
     }
 
@@ -556,6 +561,52 @@ export function SettingsPanel({
       setClearMessage('');
       clearFeedbackTimerRef.current = null;
     }, 2600);
+  };
+
+  const handleExportHistory = async () => {
+    const path = await saveDialog({
+      title: '导出 ClipVault 历史',
+      defaultPath: `clipvault-history-${new Date().toISOString().slice(0, 10)}.clipvault`,
+      filters: [{ name: 'ClipVault History', extensions: ['clipvault'] }]
+    });
+    if (!path) {
+      return;
+    }
+
+    setHistoryTransferBusy(true);
+    setHistoryTransferStatus(null);
+    try {
+      const result = await clipboardApi.exportHistory(path);
+      setHistoryTransferStatus(`已导出 ${result.exported} 条历史`);
+    } catch {
+      setHistoryTransferStatus('导出失败，请稍后重试。');
+    } finally {
+      setHistoryTransferBusy(false);
+    }
+  };
+
+  const handleImportHistory = async () => {
+    const path = await openDialog({
+      title: '导入 ClipVault 历史',
+      multiple: false,
+      filters: [{ name: 'ClipVault History', extensions: ['clipvault'] }]
+    });
+    if (!path || Array.isArray(path)) {
+      return;
+    }
+
+    setHistoryTransferBusy(true);
+    setHistoryTransferStatus(null);
+    try {
+      const result = await clipboardApi.importHistory(path);
+      setHistoryTransferStatus(
+        `新增 ${result.inserted} 条，跳过重复 ${result.skippedDuplicates} 条，合并状态 ${result.mergedState} 条`
+      );
+    } catch {
+      setHistoryTransferStatus('导入失败，请确认文件有效后重试。');
+    } finally {
+      setHistoryTransferBusy(false);
+    }
   };
 
   const addBlacklist = () => {
@@ -1168,6 +1219,39 @@ export function SettingsPanel({
           </TabsContent>
 
           <TabsContent value="storage" className="settings-tab-panel min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 pt-2.5">
+            <div className="space-y-3 rounded-[1.25rem] border border-teal-100 bg-white p-4">
+              <div>
+                <p className="text-sm font-semibold">历史备份</p>
+                <p className="mt-1 text-xs text-muted-foreground">仅导入导出历史记录和富格式数据，不包含设置、黑名单或快捷键。</p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={historyTransferBusy}
+                  onClick={() => {
+                    void handleExportHistory();
+                  }}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  {historyTransferBusy ? '处理中...' : '导出历史'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={historyTransferBusy}
+                  onClick={() => {
+                    void handleImportHistory();
+                  }}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {historyTransferBusy ? '处理中...' : '导入历史'}
+                </Button>
+              </div>
+              {historyTransferStatus ? (
+                <p className="rounded-xl bg-teal-50 px-3 py-2 text-xs font-medium text-teal-800">{historyTransferStatus}</p>
+              ) : null}
+            </div>
             <div className="grid min-h-[58px] grid-cols-[1fr_180px] items-center gap-4 rounded-[1.15rem] border border-slate-200 bg-white px-4 py-3">
               <span className="text-sm font-semibold">文本限制（KB）</span>
               <Input

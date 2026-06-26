@@ -11,12 +11,16 @@ const {
   checkHotkeyConflictsMock,
   createFixedContentMock,
   deleteFixedContentMock,
+  exportHistoryMock,
   getHistoryMock,
   getHotkeysMock,
   getSettingsMock,
+  importHistoryMock,
   listFixedContentsMock,
   listBlacklistMock,
+  openDialogMock,
   removeBlacklistMock,
+  saveDialogMock,
   updateFixedContentMock,
   updateHotkeysMock,
   updateSettingMock
@@ -26,15 +30,24 @@ const {
   checkHotkeyConflictsMock: vi.fn(),
   createFixedContentMock: vi.fn(),
   deleteFixedContentMock: vi.fn(),
+  exportHistoryMock: vi.fn(),
   getHistoryMock: vi.fn(),
   getHotkeysMock: vi.fn(),
   getSettingsMock: vi.fn(),
+  importHistoryMock: vi.fn(),
   listFixedContentsMock: vi.fn(),
   listBlacklistMock: vi.fn(),
+  openDialogMock: vi.fn(),
   removeBlacklistMock: vi.fn(),
+  saveDialogMock: vi.fn(),
   updateFixedContentMock: vi.fn(),
   updateHotkeysMock: vi.fn(),
   updateSettingMock: vi.fn()
+}));
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: openDialogMock,
+  save: saveDialogMock
 }));
 
 vi.mock('@/lib/tauriApi', () => ({
@@ -45,9 +58,11 @@ vi.mock('@/lib/tauriApi', () => ({
     clearHistory: vi.fn(),
     createFixedContent: createFixedContentMock,
     deleteFixedContent: deleteFixedContentMock,
+    exportHistory: exportHistoryMock,
     getHistory: getHistoryMock,
     getHotkeys: getHotkeysMock,
     getSettings: getSettingsMock,
+    importHistory: importHistoryMock,
     listFixedContents: listFixedContentsMock,
     listBlacklist: listBlacklistMock,
     removeBlacklist: removeBlacklistMock,
@@ -102,7 +117,7 @@ function makeFixedContent(
 }
 
 function renderPanel(
-  initialTab: 'general' | 'privacy' | 'hotkeys' | 'about',
+  initialTab: 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about',
   prefillFixedContent: { title: string; content: string; nonce: number } | null = null
 ) {
   return render(
@@ -134,6 +149,16 @@ describe('SettingsPanel', () => {
       Promise.resolve(makeFixedContent(id, input.title, input.content, input.hotkey))
     );
     deleteFixedContentMock.mockResolvedValue(undefined);
+    exportHistoryMock.mockResolvedValue({ exported: 0, path: 'D:/tmp/history.clipvault' });
+    importHistoryMock.mockResolvedValue({
+      inserted: 0,
+      skippedDuplicates: 0,
+      mergedState: 0,
+      skippedUnsupportedFormats: 0,
+      failed: 0
+    });
+    openDialogMock.mockResolvedValue(null);
+    saveDialogMock.mockResolvedValue(null);
     checkHotkeyConflictsMock.mockResolvedValue([]);
     checkHotkeyAvailableMock.mockResolvedValue(true);
     updateHotkeysMock.mockImplementation((patch: Partial<HotkeySettings>) =>
@@ -232,6 +257,38 @@ describe('SettingsPanel', () => {
     await waitFor(() => {
       expect(updateSettingMock).toHaveBeenCalledWith('maxItems', 1_000_000);
     });
+  });
+
+  it('exports history from storage settings', async () => {
+    saveDialogMock.mockResolvedValue('D:/tmp/history.clipvault');
+    exportHistoryMock.mockResolvedValue({ exported: 2, path: 'D:/tmp/history.clipvault' });
+    renderPanel('storage');
+
+    fireEvent.click(await screen.findByRole('button', { name: /导出历史/ }));
+
+    await waitFor(() => {
+      expect(exportHistoryMock).toHaveBeenCalledWith('D:/tmp/history.clipvault');
+    });
+    expect(await screen.findByText(/已导出 2 条历史/)).toBeInTheDocument();
+  });
+
+  it('imports history and shows merge summary', async () => {
+    openDialogMock.mockResolvedValue('D:/tmp/history.clipvault');
+    importHistoryMock.mockResolvedValue({
+      inserted: 3,
+      skippedDuplicates: 1,
+      mergedState: 1,
+      skippedUnsupportedFormats: 0,
+      failed: 0
+    });
+    renderPanel('storage');
+
+    fireEvent.click(await screen.findByRole('button', { name: /导入历史/ }));
+
+    await waitFor(() => {
+      expect(importHistoryMock).toHaveBeenCalledWith('D:/tmp/history.clipvault');
+    });
+    expect(await screen.findByText(/新增 3 条/)).toBeInTheDocument();
   });
 
   it('adds a blacklist app and refreshes the list', async () => {
