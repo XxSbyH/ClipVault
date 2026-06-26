@@ -1553,7 +1553,7 @@ export function SettingsPanel({
 
           <TabsContent value="about" className="settings-tab-panel min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 pt-2.5 text-sm">
             <div className="rounded-[1.25rem] border border-slate-200 bg-white p-4">
-              <p className="font-black text-slate-950">ClipVault v2.1.4</p>
+              <p className="font-black text-slate-950">ClipVault v2.1.6</p>
               <p className="mt-2 text-muted-foreground">当前缓存条目：{itemsCount}</p>
               <p className="mt-1 text-muted-foreground">数据默认保存在本地 Tauri 应用数据目录。</p>
             </div>

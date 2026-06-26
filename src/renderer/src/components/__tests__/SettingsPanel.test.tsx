@@ -205,7 +205,7 @@ describe('SettingsPanel', () => {
   it('shows the current release version in the about settings', async () => {
     renderPanel('about');
 
-    expect(await screen.findByText('ClipVault v2.1.4')).toBeInTheDocument();
+    expect(await screen.findByText('ClipVault v2.1.6')).toBeInTheDocument();
   });
 
   it('defaults history retention to permanent and can switch back to a limited duration', async () => {
