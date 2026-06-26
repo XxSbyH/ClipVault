@@ -114,9 +114,7 @@ impl ExportHistoryItem {
     }
 
     fn to_insert_input(&self, image_data: Option<Vec<u8>>) -> AppResult<ClipboardInsertInput> {
-        if self.content_hash.trim().is_empty() {
-            return Err("history import item is missing contentHash".into());
-        }
+        self.validate_for_import()?;
         Ok(ClipboardInsertInput {
             content: self.content.clone(),
             content_type: content_type_from_export(&self.content_type),
@@ -129,6 +127,13 @@ impl ExportHistoryItem {
             file_path: self.file_path.clone(),
             image_data,
         })
+    }
+
+    fn validate_for_import(&self) -> AppResult<()> {
+        if self.content_hash.trim().is_empty() {
+            return Err("history import item is missing contentHash".into());
+        }
+        Ok(())
     }
 }
 
@@ -187,6 +192,9 @@ pub fn import_history(repo: &Repository, path: &Path) -> AppResult<HistoryImport
     let manifest = read_manifest(&mut archive)?;
     validate_manifest(&manifest)?;
     let items = read_items_jsonl(&mut archive)?;
+    for item in &items {
+        item.validate_for_import()?;
+    }
 
     let mut result = HistoryImportResult {
         inserted: 0,
@@ -219,7 +227,11 @@ pub fn import_history(repo: &Repository, path: &Path) -> AppResult<HistoryImport
             continue;
         }
 
-        let image_data = read_image_payload(&mut archive, &item, &mut result)?;
+        let image_data = match read_image_payload(&mut archive, &item, &mut result)? {
+            ImagePayloadRead::None => None,
+            ImagePayloadRead::Data(data) => Some(data),
+            ImagePayloadRead::FailedRequired => continue,
+        };
         let inserted = repo.insert_imported_clipboard_item(
             item.to_insert_input(image_data)?,
             item.created_at,
@@ -233,6 +245,12 @@ pub fn import_history(repo: &Repository, path: &Path) -> AppResult<HistoryImport
     }
 
     Ok(result)
+}
+
+enum ImagePayloadRead {
+    None,
+    Data(Vec<u8>),
+    FailedRequired,
 }
 
 fn read_manifest(archive: &mut zip::ZipArchive<File>) -> AppResult<ExportManifest> {
@@ -336,13 +354,16 @@ fn read_image_payload(
     archive: &mut zip::ZipArchive<File>,
     item: &ExportHistoryItem,
     result: &mut HistoryImportResult,
-) -> AppResult<Option<Vec<u8>>> {
+) -> AppResult<ImagePayloadRead> {
     let Some(image) = &item.image else {
-        return Ok(None);
+        if item.content_type == "image" {
+            result.failed += 1;
+            return Ok(ImagePayloadRead::FailedRequired);
+        }
+        return Ok(ImagePayloadRead::None);
     };
     if !valid_payload_path(&image.path) {
-        result.failed += 1;
-        return Ok(None);
+        return Ok(failed_image_payload(item, result));
     }
     let mut file = match archive.by_name(&image.path) {
         Ok(file) => file,
@@ -354,21 +375,30 @@ fn read_image_payload(
                 path = image.path,
                 "skipping missing history import image payload: {error}"
             );
-            result.failed += 1;
-            return Ok(None);
+            return Ok(failed_image_payload(item, result));
         }
     };
     let mut data = Vec::new();
     file.read_to_end(&mut data)?;
     if data.len() != image.byte_len as usize {
-        result.failed += 1;
-        return Ok(None);
+        return Ok(failed_image_payload(item, result));
     }
     if crate::clipboard::formats::data_hash(&data) != image.hash {
-        result.failed += 1;
-        return Ok(None);
+        return Ok(failed_image_payload(item, result));
     }
-    Ok(Some(data))
+    Ok(ImagePayloadRead::Data(data))
+}
+
+fn failed_image_payload(
+    item: &ExportHistoryItem,
+    result: &mut HistoryImportResult,
+) -> ImagePayloadRead {
+    result.failed += 1;
+    if item.content_type == "image" {
+        ImagePayloadRead::FailedRequired
+    } else {
+        ImagePayloadRead::None
+    }
 }
 
 fn write_image_payload(
@@ -655,6 +685,51 @@ mod tests {
     }
 
     #[test]
+    fn import_rejects_invalid_items_before_writing_any_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("invalid-item.clipvault");
+        let valid = serde_json::json!({
+            "exportId": "000001",
+            "content": "hello",
+            "preview": "hello",
+            "contentType": "text",
+            "contentHash": "hash-valid",
+            "createdAt": 10,
+            "lastUsedAt": null,
+            "useCount": 0,
+            "isPinned": false,
+            "isFavorite": false,
+            "metadata": {},
+            "formats": []
+        });
+        let invalid = serde_json::json!({
+            "exportId": "000002",
+            "content": "bad",
+            "preview": "bad",
+            "contentType": "text",
+            "contentHash": "",
+            "createdAt": 11,
+            "lastUsedAt": null,
+            "useCount": 0,
+            "isPinned": false,
+            "isFavorite": false,
+            "metadata": {},
+            "formats": []
+        });
+        write_test_zip(
+            &path,
+            r#"{"app":"ClipVault","type":"history","exportVersion":1,"createdAt":1,"itemCount":2}"#,
+            &format!("{valid}\n{invalid}\n"),
+        );
+        let repo = Repository::open(dir.path().join("clipboard.db")).unwrap();
+
+        let error = super::import_history(&repo, &path).unwrap_err().to_string();
+
+        assert!(error.contains("contentHash"));
+        assert_eq!(repo.count_items().unwrap(), 0);
+    }
+
+    #[test]
     fn import_history_inserts_items_and_format_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history.clipvault");
@@ -702,6 +777,47 @@ mod tests {
         let formats = repo.list_clipboard_formats(history[0].id).unwrap();
         assert_eq!(formats.len(), 1);
         assert_eq!(formats[0].data, b"<b>hello</b>");
+    }
+
+    #[test]
+    fn import_skips_image_item_when_image_payload_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad-image.clipvault");
+        let item = serde_json::json!({
+            "exportId": "000001",
+            "content": null,
+            "preview": "Image",
+            "contentType": "image",
+            "contentHash": "hash-image",
+            "createdAt": 10,
+            "lastUsedAt": null,
+            "useCount": 0,
+            "isPinned": false,
+            "isFavorite": false,
+            "metadata": {},
+            "image": {
+                "formatName": "PNG",
+                "mimeType": "image/png",
+                "encoding": "binary",
+                "byteLen": 3,
+                "hash": "wrong-hash",
+                "path": "formats/000001-image.bin"
+            },
+            "formats": []
+        });
+        write_test_zip_with_payloads(
+            &path,
+            r#"{"app":"ClipVault","type":"history","exportVersion":1,"createdAt":1,"itemCount":1}"#,
+            &format!("{item}\n"),
+            &[("formats/000001-image.bin", &[1, 2, 3])],
+        );
+        let repo = Repository::open(dir.path().join("clipboard.db")).unwrap();
+
+        let result = super::import_history(&repo, &path).unwrap();
+
+        assert_eq!(result.inserted, 0);
+        assert_eq!(result.failed, 1);
+        assert_eq!(repo.count_items().unwrap(), 0);
     }
 
     fn write_test_zip(path: &std::path::Path, manifest: &str, items: &str) {
