@@ -56,10 +56,10 @@ ClipVault 是一个面向 Windows 的本地优先剪贴板管理器。它已从 
 | 🧠 历史记录 | 保存文本、图片、文件路径、URL、代码、颜色和邮箱等常见内容 |
 | 🔎 快速搜索 | 支持普通文本搜索，搜索框也支持 `/pattern/i` 和 `re:pattern` 正则匹配 |
 | 🖼️ 图片预览 | 图片记录可在详情区预览，并展示大小、时间和使用次数 |
-| ⚡ 快速复制 | 使用快捷键切换上一项/下一项，无需打开完整面板 |
+| ⚡ 快速复制 | 使用快捷键复制上一项/下一项到系统剪贴板，无需打开完整面板 |
 | 🪄 HUD 反馈 | 用轻量浮层提示复制成功、面板唤起、快捷切换和状态变化 |
 | 🔒 隐私过滤 | 默认跳过密码、银行卡号、身份证号、token/API key 等敏感内容 |
-| 🚫 应用黑名单 | 指定应用中的剪贴板内容不会被记录 |
+| 🚫 应用黑名单 | 指定应用中的剪贴板内容不会被记录，切换应用后也不会补录同一次复制 |
 | 🖥️ 桌面集成 | 支持系统托盘、全局快捷键、自启动、单实例和暂停监听 |
 | 🌗 主题模式 | 支持亮色、暗色、跟随系统 |
 | 📦 小体积发布 | 基于 Tauri 2 + WebView2，不再携带 Electron runtime |
@@ -82,7 +82,7 @@ https://github.com/XxSbyH/ClipVault/releases/latest
 | `ClipVault_*_macos_universal.app.zip` | macOS Intel / Apple Silicon | macOS 便携压缩包，解压后手动运行 |
 
 当前版本未配置代码签名，Windows 首次安装时可能出现安全提示。
-升级时先退出正在运行的 ClipVault，然后直接运行新版本 `ClipVault_*_windows_x64_setup.exe` 覆盖安装。历史记录、设置和黑名单保存在本地应用数据目录，不会因为覆盖安装被删除；安装器会阻止旧版本覆盖新版本。
+升级时先退出正在运行的 ClipVault，然后直接运行新版本 `ClipVault_*_windows_x64_setup.exe` 覆盖安装。历史记录、设置和黑名单保存在本地应用数据目录，不会因为覆盖安装被删除。
 
 ### 默认快捷键
 
@@ -92,8 +92,8 @@ https://github.com/XxSbyH/ClipVault/releases/latest
 | `Ctrl+Shift+F` | 打开主面板并聚焦搜索 |
 | `Ctrl+Shift+P` | 暂停或恢复监听 |
 | `Ctrl+Shift+C` | 清空非收藏历史 |
-| `Ctrl+Alt+Left` | 快速切换并粘贴上一项 |
-| `Ctrl+Alt+Right` | 快速切换并粘贴下一项 |
+| `Ctrl+Alt+Left` | 复制更旧的历史内容到剪贴板 |
+| `Ctrl+Alt+Right` | 复制更新的历史内容到剪贴板 |
 | `ArrowUp / ArrowDown` | 在面板内移动选择 |
 | `Enter` | 复制当前选中项 |
 | `Delete` | 删除当前选中项 |
@@ -160,6 +160,7 @@ ClipVault 默认本地优先，不提供云同步。
 - 文件类型只保存路径和元数据，不复制文件内容。
 - 收藏项在清理时保留。
 - 非收藏旧项按保留天数和最大条数清理。
+- 从黑名单应用复制的内容不会写入历史；即使随后切换到普通应用，同一次剪贴板变更也会继续被忽略。
 
 默认跳过的敏感内容：
 
@@ -215,10 +216,10 @@ It is designed for development, writing, research, support work, operations, and
 | 🧠 Clipboard history | Stores text, images, file paths, URLs, code snippets, colors, emails, and more |
 | 🔎 Search | Supports plain text search plus regex queries such as `/pattern/i` and `re:pattern` |
 | 🖼️ Image preview | Preview copied images with metadata in the detail panel |
-| ⚡ Quick paste | Switch and paste previous/next history items with global shortcuts |
+| ⚡ Quick copy | Copy previous/next history items to the system clipboard with global shortcuts |
 | 🪄 HUD feedback | Lightweight overlay for copy success, panel state, and quick actions |
 | 🔒 Privacy filter | Skips passwords, card numbers, identity numbers, tokens, and API keys by default |
-| 🚫 App blacklist | Avoids recording clipboard content from configured apps |
+| 🚫 App blacklist | Avoids recording clipboard content from configured apps, including the same clipboard change after switching apps |
 | 🖥️ Desktop integration | Tray menu, global shortcuts, autostart, single instance, and monitoring pause/resume |
 | 🌗 Theme modes | Light, dark, and system theme modes |
 | 📦 Lightweight packaging | Tauri 2 + WebView2, without Electron runtime |
@@ -241,7 +242,7 @@ Release asset guide:
 | `ClipVault_*_macos_universal.app.zip` | macOS Intel / Apple Silicon | Portable macOS app archive |
 
 The current build is unsigned, so Windows may show a security prompt during first-time installation.
-To upgrade, quit the running ClipVault process and run the newer `ClipVault_*_windows_x64_setup.exe` over the existing installation. History, settings, and blacklist data stay in the local app data directory, and the installer blocks older versions from overwriting newer versions.
+To upgrade, quit the running ClipVault process and run the newer `ClipVault_*_windows_x64_setup.exe` over the existing installation. History, settings, and blacklist data stay in the local app data directory.
 
 ### Default Shortcuts
 
@@ -251,8 +252,8 @@ To upgrade, quit the running ClipVault process and run the newer `ClipVault_*_wi
 | `Ctrl+Shift+F` | Show the main panel and focus search |
 | `Ctrl+Shift+P` | Pause or resume monitoring |
 | `Ctrl+Shift+C` | Clear non-favorite history |
-| `Ctrl+Alt+Left` | Quick paste previous item |
-| `Ctrl+Alt+Right` | Quick paste next item |
+| `Ctrl+Alt+Left` | Copy older history item to clipboard |
+| `Ctrl+Alt+Right` | Copy newer history item to clipboard |
 | `ArrowUp / ArrowDown` | Move selection inside the panel |
 | `Enter` | Copy selected item |
 | `Delete` | Delete selected item |
@@ -313,6 +314,7 @@ Default behavior:
 - File records store only paths and metadata, not file contents.
 - Favorite items are preserved when cleaning history.
 - Non-favorite old items are cleaned by retention days and max item count.
+- Content copied from blacklisted apps is skipped, and the same clipboard change remains ignored after switching to a normal app.
 
 ### License
 

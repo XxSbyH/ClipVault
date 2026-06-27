@@ -4,6 +4,9 @@
 .git/
 AGENTS.md
 docs/
+!docs/
+docs/*
+!docs/FEATURES.md
 screenshoot/
 
 node_modules

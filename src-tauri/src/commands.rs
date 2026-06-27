@@ -1270,10 +1270,17 @@ pub fn update_hotkeys(
     let candidate = build_hotkey_settings_candidate(&current, &patch)?;
     validate_hotkey_settings_conflicts_with_fixed_contents(state.inner(), &candidate)?;
     let fixed_contents = state.repository().list_fixed_contents()?;
+    let required_commands = hotkey_patch_entries(&patch)
+        .into_iter()
+        .map(|(command, _)| command)
+        .collect::<Vec<_>>();
 
-    if let Err(error) =
-        hotkeys::replace_keyboard_shortcuts_with_fixed_contents(&app, &candidate, &fixed_contents)
-    {
+    if let Err(error) = hotkeys::replace_keyboard_shortcuts_with_fixed_contents_requiring_commands(
+        &app,
+        &candidate,
+        &fixed_contents,
+        &required_commands,
+    ) {
         if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
             return Err(with_restore_error(error, restore_error));
         }
