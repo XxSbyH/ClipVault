@@ -82,6 +82,7 @@ https://github.com/XxSbyH/ClipVault/releases/latest
 | `ClipVault_*_macos_universal.app.zip` | macOS Intel / Apple Silicon | macOS 便携压缩包，解压后手动运行 |
 
 当前版本未配置代码签名，Windows 首次安装时可能出现安全提示。
+升级时先退出正在运行的 ClipVault，然后直接运行新版本 `ClipVault_*_windows_x64_setup.exe` 覆盖安装。历史记录、设置和黑名单保存在本地应用数据目录，不会因为覆盖安装被删除；安装器会阻止旧版本覆盖新版本。
 
 ### 默认快捷键
 
@@ -240,6 +241,7 @@ Release asset guide:
 | `ClipVault_*_macos_universal.app.zip` | macOS Intel / Apple Silicon | Portable macOS app archive |
 
 The current build is unsigned, so Windows may show a security prompt during first-time installation.
+To upgrade, quit the running ClipVault process and run the newer `ClipVault_*_windows_x64_setup.exe` over the existing installation. History, settings, and blacklist data stay in the local app data directory, and the installer blocks older versions from overwriting newer versions.
 
 ### Default Shortcuts
 

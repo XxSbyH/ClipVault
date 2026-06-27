@@ -14,8 +14,8 @@ use crate::{
     errors::{AppError, AppResult},
     events,
     models::{
-        ClipboardContentType, ClipboardFormatInput, ClipboardInsertInput, ClipboardItem,
-        ClipboardMetadata,
+        BlacklistApp, ClipboardContentType, ClipboardFormatInput, ClipboardInsertInput,
+        ClipboardItem, ClipboardMetadata,
     },
     privacy::{filter::is_sensitive_content, foreground::is_blacklisted_foreground_app},
 };
@@ -46,7 +46,7 @@ pub struct ClipboardMonitor {
     last_hash: String,
     next_image_scan_at: i64,
     next_blacklist_check_at: i64,
-    last_blacklist_result: bool,
+    blacklist_apps: Vec<BlacklistApp>,
 }
 
 impl ClipboardMonitor {
@@ -257,13 +257,29 @@ fn is_blacklisted(
     state: &AppState,
     monitor: &mut ClipboardMonitor,
 ) -> AppResult<bool> {
-    let now = now_millis();
+    is_blacklisted_with_cache(
+        monitor,
+        now_millis(),
+        || state.repository().list_blacklist_apps(),
+        is_blacklisted_foreground_app,
+    )
+}
+
+fn is_blacklisted_with_cache<L, M>(
+    monitor: &mut ClipboardMonitor,
+    now: i64,
+    mut load_blacklist: L,
+    mut matches_foreground: M,
+) -> AppResult<bool>
+where
+    L: FnMut() -> AppResult<Vec<BlacklistApp>>,
+    M: FnMut(&[BlacklistApp]) -> bool,
+{
     if now >= monitor.next_blacklist_check_at {
-        let apps = state.repository().list_blacklist_apps()?;
-        monitor.last_blacklist_result = is_blacklisted_foreground_app(&apps);
+        monitor.blacklist_apps = load_blacklist()?;
         monitor.next_blacklist_check_at = now + BLACKLIST_CHECK_INTERVAL_MS;
     }
-    Ok(monitor.last_blacklist_result)
+    Ok(matches_foreground(&monitor.blacklist_apps))
 }
 
 fn insert_and_emit_with_formats(
@@ -477,6 +493,47 @@ mod tests {
             data: data.to_vec(),
             data_hash: hash_bytes(data),
         }
+    }
+
+    fn blacklist_entry(app_name: &str) -> crate::models::BlacklistApp {
+        crate::models::BlacklistApp {
+            id: 1,
+            app_name: app_name.to_string(),
+            app_path: None,
+            is_builtin: false,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn blacklist_decision_is_recomputed_even_when_app_list_cache_is_fresh() {
+        let mut monitor = ClipboardMonitor::default();
+        let mut loads = 0;
+
+        let first = is_blacklisted_with_cache(
+            &mut monitor,
+            100,
+            || {
+                loads += 1;
+                Ok(vec![blacklist_entry("chrome.exe")])
+            },
+            |_| false,
+        )
+        .unwrap();
+        let second = is_blacklisted_with_cache(
+            &mut monitor,
+            101,
+            || {
+                loads += 1;
+                Ok(vec![blacklist_entry("chrome.exe")])
+            },
+            |_| true,
+        )
+        .unwrap();
+
+        assert!(!first);
+        assert!(second);
+        assert_eq!(loads, 1);
     }
 
     #[test]

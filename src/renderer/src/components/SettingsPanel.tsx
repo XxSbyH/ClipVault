@@ -29,6 +29,8 @@ import { cn } from '@/lib/utils';
 import { useClipboardStore } from '@/store/clipboardStore';
 
 type SettingsTab = 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about';
+type HotkeyAvailabilityStatus = 'checking' | 'available' | 'unavailable' | 'unknown';
+type HotkeyAvailabilityMap = Partial<Record<keyof HotkeySettings, HotkeyAvailabilityStatus>>;
 
 interface FixedContentPrefill {
   title: string;
@@ -73,6 +75,7 @@ const HOTKEY_CONFLICT_LABELS: Record<string, string> = {
 
 const NORMAL_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['openPanel', 'search', 'pause', 'clear'];
 const QUICK_PASTE_HOTKEY_KEYS: Array<keyof HotkeySettings> = ['quickPastePrev', 'quickPasteNext'];
+const ALL_HOTKEY_KEYS: Array<keyof HotkeySettings> = [...NORMAL_HOTKEY_KEYS, ...QUICK_PASTE_HOTKEY_KEYS];
 const FIXED_CONTENT_EXAMPLES = [
   { title: '常用回复', content: '收到，我稍后处理。' },
   { title: '邮件签名', content: '谢谢，祝好。' },
@@ -303,6 +306,7 @@ export function SettingsPanel({
   const [hotkeys, setHotkeys] = useState<HotkeySettings | null>(null);
   const [editingHotkey, setEditingHotkey] = useState<keyof HotkeySettings | null>(null);
   const [hotkeyConflicts, setHotkeyConflicts] = useState<string[]>([]);
+  const [hotkeyAvailability, setHotkeyAvailability] = useState<HotkeyAvailabilityMap>({});
   const [recordingPreview, setRecordingPreview] = useState('');
   const [fixedContents, setFixedContents] = useState<FixedContent[]>([]);
   const [showFixedContentForm, setShowFixedContentForm] = useState(false);
@@ -327,6 +331,7 @@ export function SettingsPanel({
   const clearFeedbackTimerRef = useRef<number | null>(null);
   const settingsUpdateSeqRef = useRef<Partial<Record<keyof AppSettings, number>>>({});
   const hotkeyRecordSeqRef = useRef(0);
+  const hotkeyAvailabilitySeqRef = useRef(0);
   const fixedContentHotkeyRecordSeqRef = useRef(0);
   const openRef = useRef(open);
 
@@ -354,9 +359,11 @@ export function SettingsPanel({
     openRef.current = open;
     if (!open) {
       hotkeyRecordSeqRef.current += 1;
+      hotkeyAvailabilitySeqRef.current += 1;
       fixedContentHotkeyRecordSeqRef.current += 1;
       setEditingHotkey(null);
       setRecordingPreview('');
+      setHotkeyAvailability({});
       pressedKeysRef.current.clear();
       candidateComboRef.current = '';
       setRecordingFixedContentHotkey(false);
@@ -421,6 +428,45 @@ export function SettingsPanel({
       cancelled = true;
     };
   }, [open, initialTab, setSettings]);
+
+  const refreshHotkeyAvailability = (nextHotkeys: HotkeySettings) => {
+    const seq = hotkeyAvailabilitySeqRef.current + 1;
+    hotkeyAvailabilitySeqRef.current = seq;
+    setHotkeyAvailability(
+      ALL_HOTKEY_KEYS.reduce<HotkeyAvailabilityMap>((status, key) => {
+        status[key] = 'checking';
+        return status;
+      }, {})
+    );
+
+    void Promise.all(
+      ALL_HOTKEY_KEYS.map(async (key) => {
+        try {
+          const available = await clipboardApi.checkHotkeyAvailable(nextHotkeys[key]);
+          return [key, available ? 'available' : 'unavailable'] as const;
+        } catch {
+          return [key, 'unknown'] as const;
+        }
+      })
+    ).then((entries) => {
+      if (!openRef.current || hotkeyAvailabilitySeqRef.current !== seq) {
+        return;
+      }
+      setHotkeyAvailability(
+        entries.reduce<HotkeyAvailabilityMap>((status, [key, value]) => {
+          status[key] = value;
+          return status;
+        }, {})
+      );
+    });
+  };
+
+  useEffect(() => {
+    if (!open || activeTab !== 'hotkeys' || !hotkeys) {
+      return;
+    }
+    refreshHotkeyAvailability(hotkeys);
+  }, [open, activeTab, hotkeys]);
 
   useEffect(() => {
     if (!open || !prefillFixedContent) {
@@ -771,6 +817,7 @@ export function SettingsPanel({
     pressedKeysRef.current.clear();
     candidateComboRef.current = '';
     setHotkeyConflicts([]);
+    setHotkeyAvailability({});
     setErrorMessage('');
     void clipboardApi
       .updateHotkeys(DEFAULT_HOTKEYS)
@@ -1235,7 +1282,7 @@ export function SettingsPanel({
                   }}
                 >
                   <Download className="block h-4 w-4 shrink-0" />
-                  <span className="leading-none">{historyTransferBusy ? '处理中...' : '导出历史'}</span>
+                  <span className="leading-none">{historyTransferBusy ? '处理中...' : '导出历史数据'}</span>
                 </Button>
                 <Button
                   type="button"
@@ -1247,7 +1294,7 @@ export function SettingsPanel({
                   }}
                 >
                   <Upload className="block h-4 w-4 shrink-0" />
-                  <span className="leading-none">{historyTransferBusy ? '处理中...' : '导入历史'}</span>
+                  <span className="leading-none">{historyTransferBusy ? '处理中...' : '导入历史数据'}</span>
                 </Button>
               </div>
               {historyTransferStatus ? (
@@ -1336,6 +1383,7 @@ export function SettingsPanel({
               title="常规快捷键"
               keys={NORMAL_HOTKEY_KEYS}
               hotkeys={hotkeys}
+              availability={hotkeyAvailability}
               editingHotkey={editingHotkey}
               recordingPreview={recordingPreview}
               onRecord={startHotkeyRecording}
@@ -1344,6 +1392,7 @@ export function SettingsPanel({
               title="历史快速复制"
               keys={QUICK_PASTE_HOTKEY_KEYS}
               hotkeys={hotkeys}
+              availability={hotkeyAvailability}
               editingHotkey={editingHotkey}
               recordingPreview={recordingPreview}
               onRecord={startHotkeyRecording}
@@ -1568,6 +1617,7 @@ interface HotkeyGroupProps {
   title: string;
   keys: Array<keyof HotkeySettings>;
   hotkeys: HotkeySettings | null;
+  availability: HotkeyAvailabilityMap;
   editingHotkey: keyof HotkeySettings | null;
   recordingPreview: string;
   onRecord: (key: keyof HotkeySettings) => void;
@@ -1577,6 +1627,7 @@ function HotkeyGroup({
   title,
   keys,
   hotkeys,
+  availability,
   editingHotkey,
   recordingPreview,
   onRecord
@@ -1586,6 +1637,7 @@ function HotkeyGroup({
       <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">{title}</p>
       {keys.map((key) => {
         const value = hotkeys?.[key] ?? DEFAULT_HOTKEYS[key];
+        const isUnavailable = availability[key] === 'unavailable';
         return (
           <div
             key={key}
@@ -1595,20 +1647,35 @@ function HotkeyGroup({
               <p className="text-sm font-semibold">{HOTKEY_LABELS[key]}</p>
               <p className="text-xs text-muted-foreground">{HOTKEY_DESCRIPTIONS[key]}</p>
             </div>
-            <button
-              type="button"
-              className="rounded-xl border border-teal-100 bg-teal-50 px-3 py-1.5 font-mono text-xs font-bold text-teal-900 hover:border-teal-300"
-              onClick={() => onRecord(key)}
-            >
-              {editingHotkey === key ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-700" />
-                  <span>{recordingPreview ? formatHotkeyLabel(recordingPreview) : '请按组合键...'}</span>
+            <div className="flex shrink-0 items-center gap-2">
+              {isUnavailable ? (
+                <span
+                  className="text-xs font-semibold text-red-600"
+                  title="该快捷键未注册，可能已被其他应用占用"
+                >
+                  热键被占用
                 </span>
-              ) : (
-                formatHotkeyLabel(value)
-              )}
-            </button>
+              ) : null}
+              <button
+                type="button"
+                className={cn(
+                  'rounded-xl border px-3 py-1.5 font-mono text-xs font-bold hover:border-teal-300',
+                  isUnavailable
+                    ? 'border-red-200 bg-red-50 text-red-700 hover:border-red-300'
+                    : 'border-teal-100 bg-teal-50 text-teal-900'
+                )}
+                onClick={() => onRecord(key)}
+              >
+                {editingHotkey === key ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-700" />
+                    <span>{recordingPreview ? formatHotkeyLabel(recordingPreview) : '请按组合键...'}</span>
+                  </span>
+                ) : (
+                  formatHotkeyLabel(value)
+                )}
+              </button>
+            </div>
           </div>
         );
       })}

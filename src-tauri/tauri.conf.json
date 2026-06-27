@@ -66,6 +66,12 @@
     ],
     "icon": [
       "../resources/icon.ico"
-    ]
+    ],
+    "windows": {
+      "allowDowngrades": false,
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

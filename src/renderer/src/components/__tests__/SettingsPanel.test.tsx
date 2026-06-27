@@ -264,7 +264,7 @@ describe('SettingsPanel', () => {
     exportHistoryMock.mockResolvedValue({ exported: 2, path: 'D:/tmp/history.clipvault' });
     renderPanel('storage');
 
-    fireEvent.click(await screen.findByRole('button', { name: /导出历史/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /导出历史数据/ }));
 
     await waitFor(() => {
       expect(exportHistoryMock).toHaveBeenCalledWith('D:/tmp/history.clipvault');
@@ -275,8 +275,8 @@ describe('SettingsPanel', () => {
   it('keeps storage history action icons aligned with labels', async () => {
     renderPanel('storage');
 
-    const exportButton = await screen.findByRole('button', { name: '导出历史' });
-    const importButton = await screen.findByRole('button', { name: '导入历史' });
+    const exportButton = await screen.findByRole('button', { name: '导出历史数据' });
+    const importButton = await screen.findByRole('button', { name: '导入历史数据' });
 
     expect(exportButton).toHaveClass('gap-2');
     expect(exportButton).toHaveClass('leading-none');
@@ -297,7 +297,7 @@ describe('SettingsPanel', () => {
     });
     renderPanel('storage');
 
-    fireEvent.click(await screen.findByRole('button', { name: /导入历史/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /导入历史数据/ }));
 
     await waitFor(() => {
       expect(importHistoryMock).toHaveBeenCalledWith('D:/tmp/history.clipvault');
@@ -360,6 +360,20 @@ describe('SettingsPanel', () => {
     expect(await screen.findByText('历史快速复制')).toBeInTheDocument();
     expect(screen.getByText('复制更旧的历史内容到剪贴板')).toBeInTheDocument();
     expect(screen.queryByText('快速粘贴')).not.toBeInTheDocument();
+  });
+
+  it('marks hotkeys that are unavailable in the system', async () => {
+    checkHotkeyAvailableMock.mockImplementation((hotkey: string) =>
+      Promise.resolve(hotkey !== DEFAULT_HOTKEYS.clear)
+    );
+    renderPanel('hotkeys');
+
+    expect(await screen.findByText('清空历史')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(checkHotkeyAvailableMock).toHaveBeenCalledWith(DEFAULT_HOTKEYS.clear);
+    });
+    expect(await screen.findByText('热键被占用')).toBeInTheDocument();
   });
 
   it('shows fixed content trial examples without creating records', async () => {
