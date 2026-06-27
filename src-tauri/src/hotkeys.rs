@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     time::{Duration, Instant},
 };
@@ -229,34 +230,33 @@ pub fn head_id(items: &[ClipboardItem]) -> Option<i64> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StartupHotkeyRegistrationStatus {
-    Registered,
-    Degraded { error: String },
+pub struct StartupHotkeyRegistrationFailure {
+    pub command: String,
+    pub hotkey: String,
+    pub error: String,
 }
 
-pub fn handle_startup_hotkey_registration_result(
-    result: AppResult<()>,
-) -> StartupHotkeyRegistrationStatus {
-    match result {
-        Ok(()) => StartupHotkeyRegistrationStatus::Registered,
-        Err(error) => {
-            let error = error.to_string();
-            tracing::error!(
-                target: "hotkeys",
-                area = "hotkey",
-                direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
-                "global keyboard shortcuts unavailable during startup; startup continues: {error}"
-            );
-            StartupHotkeyRegistrationStatus::Degraded { error }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupHotkeyRegistrationStatus {
+    Registered,
+    Degraded {
+        failures: Vec<StartupHotkeyRegistrationFailure>,
+    },
+}
+
+impl StartupHotkeyRegistrationStatus {
+    fn from_failures(failures: Vec<StartupHotkeyRegistrationFailure>) -> Self {
+        if failures.is_empty() {
+            Self::Registered
+        } else {
+            Self::Degraded { failures }
         }
     }
 }
 
 pub fn register_global_shortcuts(app: &AppHandle) -> StartupHotkeyRegistrationStatus {
     let state = app.state::<AppState>();
-    let keyboard_status = handle_startup_hotkey_registration_result(
-        replace_all_keyboard_shortcuts(app, state.inner()),
-    );
+    let keyboard_status = register_startup_keyboard_shortcuts(app, state.inner());
     if let Err(error) = start_wheel_hook(app) {
         tracing::warn!(
             target: "hotkeys",
@@ -274,6 +274,43 @@ pub fn register_global_shortcuts(app: &AppHandle) -> StartupHotkeyRegistrationSt
         );
     }
     keyboard_status
+}
+
+fn register_startup_keyboard_shortcuts(
+    app: &AppHandle,
+    state: &AppState,
+) -> StartupHotkeyRegistrationStatus {
+    let settings = match state.repository().get_hotkey_settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            return StartupHotkeyRegistrationStatus::from_failures(vec![
+                startup_hotkey_registration_failure("loadHotkeys", "", error),
+            ]);
+        }
+    };
+    let fixed_contents = match state.repository().list_fixed_contents() {
+        Ok(fixed_contents) => fixed_contents,
+        Err(error) => {
+            return StartupHotkeyRegistrationStatus::from_failures(vec![
+                startup_hotkey_registration_failure("loadFixedContents", "", error),
+            ]);
+        }
+    };
+
+    if let Err(error) = app.global_shortcut().unregister_all() {
+        return StartupHotkeyRegistrationStatus::from_failures(vec![
+            startup_hotkey_registration_failure(
+                "unregisterAll",
+                "",
+                format!("failed to unregister hotkeys: {error}"),
+            ),
+        ]);
+    }
+
+    register_startup_keyboard_shortcut_entries(
+        keyboard_shortcut_registrations(&settings, &fixed_contents),
+        |accelerator, action| register_shortcut(app, accelerator, action),
+    )
 }
 
 pub fn replace_all_keyboard_shortcuts(app: &AppHandle, state: &AppState) -> AppResult<()> {
@@ -442,6 +479,13 @@ enum HotkeyAction {
     FixedContent(i64),
 }
 
+#[derive(Debug, Clone)]
+struct KeyboardShortcutRegistration<'a> {
+    command: Cow<'a, str>,
+    accelerator: &'a str,
+    action: HotkeyAction,
+}
+
 fn keyboard_shortcut_entries(settings: &HotkeySettings) -> Vec<(&'static str, &str, HotkeyAction)> {
     vec![
         ("openPanel", &settings.open_panel, HotkeyAction::OpenPanel),
@@ -459,6 +503,81 @@ fn keyboard_shortcut_entries(settings: &HotkeySettings) -> Vec<(&'static str, &s
             HotkeyAction::QuickPaste(QuickPasteDirection::Newer),
         ),
     ]
+}
+
+fn keyboard_shortcut_registrations<'a>(
+    settings: &'a HotkeySettings,
+    fixed_contents: &'a [FixedContent],
+) -> Vec<KeyboardShortcutRegistration<'a>> {
+    let mut registrations: Vec<_> = keyboard_shortcut_entries(settings)
+        .into_iter()
+        .map(
+            |(command, accelerator, action)| KeyboardShortcutRegistration {
+                command: Cow::Borrowed(command),
+                accelerator,
+                action,
+            },
+        )
+        .collect();
+
+    registrations.extend(
+        fixed_contents
+            .iter()
+            .filter(|content| content.enabled)
+            .map(|content| KeyboardShortcutRegistration {
+                command: Cow::Owned(format!("fixed content {}", content.id)),
+                accelerator: content.hotkey.as_str(),
+                action: HotkeyAction::FixedContent(content.id),
+            }),
+    );
+
+    registrations
+}
+
+fn register_startup_keyboard_shortcut_entries<'a, I, F>(
+    entries: I,
+    mut register: F,
+) -> StartupHotkeyRegistrationStatus
+where
+    I: IntoIterator<Item = KeyboardShortcutRegistration<'a>>,
+    F: FnMut(&str, HotkeyAction) -> AppResult<()>,
+{
+    let mut failures = Vec::new();
+
+    for entry in entries {
+        let accelerator = entry.accelerator.trim();
+        if accelerator.is_empty() {
+            continue;
+        }
+
+        if let Err(error) = register(accelerator, entry.action) {
+            let failure = startup_hotkey_registration_failure(&entry.command, accelerator, error);
+            tracing::error!(
+                target: "hotkeys",
+                area = "hotkey",
+                direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
+                command = %failure.command,
+                hotkey = %failure.hotkey,
+                "global keyboard shortcut unavailable during startup; continuing with remaining shortcuts: {}",
+                failure.error
+            );
+            failures.push(failure);
+        }
+    }
+
+    StartupHotkeyRegistrationStatus::from_failures(failures)
+}
+
+fn startup_hotkey_registration_failure(
+    command: &str,
+    hotkey: &str,
+    error: impl std::fmt::Display,
+) -> StartupHotkeyRegistrationFailure {
+    StartupHotkeyRegistrationFailure {
+        command: command.to_string(),
+        hotkey: hotkey.to_string(),
+        error: error.to_string(),
+    }
 }
 
 fn register_keyboard_shortcuts_with_fixed_contents(
@@ -1661,18 +1780,76 @@ mod tests {
 
     #[test]
     fn startup_hotkey_registration_conflicts_are_non_fatal() {
-        let result = handle_startup_hotkey_registration_result(Err(AppError::from(
-            "failed to register hotkey CommandOrControl+Shift+C: HotKey already registered",
-        )));
+        let mut attempts = Vec::new();
+        let entries = vec![
+            startup_keyboard_shortcut_registration(
+                "openPanel",
+                "CommandOrControl+Shift+V",
+                HotkeyAction::OpenPanel,
+            ),
+            startup_keyboard_shortcut_registration(
+                "clear",
+                "CommandOrControl+Shift+C",
+                HotkeyAction::Clear,
+            ),
+            startup_keyboard_shortcut_registration(
+                "quickPastePrev",
+                "Ctrl+Alt+Left",
+                HotkeyAction::QuickPaste(QuickPasteDirection::Older),
+            ),
+        ];
+
+        let result = register_startup_keyboard_shortcut_entries(entries, |accelerator, _action| {
+            attempts.push(accelerator.to_string());
+            if accelerator == "CommandOrControl+Shift+C" {
+                return Err(AppError::from("HotKey already registered"));
+            }
+            Ok(())
+        });
 
         assert_eq!(
+            attempts,
+            vec![
+                "CommandOrControl+Shift+V",
+                "CommandOrControl+Shift+C",
+                "Ctrl+Alt+Left"
+            ]
+        );
+        assert!(matches!(
             result,
             StartupHotkeyRegistrationStatus::Degraded {
-                error:
-                    "failed to register hotkey CommandOrControl+Shift+C: HotKey already registered"
-                        .to_string()
-            }
-        );
+                failures
+            } if failures.len() == 1
+                && failures[0].command == "clear"
+                && failures[0].hotkey == "CommandOrControl+Shift+C"
+                && failures[0].error == "HotKey already registered"
+        ));
+    }
+
+    #[test]
+    fn startup_hotkey_registration_reports_registered_when_all_attempts_succeed() {
+        let entries = vec![startup_keyboard_shortcut_registration(
+            "openPanel",
+            "CommandOrControl+Shift+V",
+            HotkeyAction::OpenPanel,
+        )];
+
+        let result =
+            register_startup_keyboard_shortcut_entries(entries, |_accelerator, _action| Ok(()));
+
+        assert_eq!(result, StartupHotkeyRegistrationStatus::Registered);
+    }
+
+    fn startup_keyboard_shortcut_registration(
+        command: &'static str,
+        accelerator: &'static str,
+        action: HotkeyAction,
+    ) -> KeyboardShortcutRegistration<'static> {
+        KeyboardShortcutRegistration {
+            command: command.into(),
+            accelerator,
+            action,
+        }
     }
 
     #[test]

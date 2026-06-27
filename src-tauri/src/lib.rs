@@ -308,18 +308,32 @@ pub fn run() {
                         "registered",
                     );
                 }
-                hotkeys::StartupHotkeyRegistrationStatus::Degraded { error } => {
+                hotkeys::StartupHotkeyRegistrationStatus::Degraded { failures } => {
+                    let failure_summary = failures
+                        .iter()
+                        .map(|failure| {
+                            if failure.hotkey.is_empty() {
+                                format!("{}: {}", failure.command, failure.error)
+                            } else {
+                                format!(
+                                    "{} {}: {}",
+                                    failure.command, failure.hotkey, failure.error
+                                )
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     logger::startup_error(
                         "hotkey_register",
                         "hotkey",
-                        "global shortcuts unavailable; startup continues so hotkeys can be changed in settings",
-                        &error,
+                        "some global shortcuts unavailable; startup continues with remaining registered shortcuts",
+                        format!("failed_count={} {}", failures.len(), failure_summary),
                     );
                     logger::startup_info(
                         "hotkey_register",
                         "hotkey",
-                        "startup continued without global keyboard shortcuts",
-                        "degraded",
+                        "startup continued with remaining global keyboard shortcuts",
+                        format!("degraded_failed_count={}", failures.len()),
                     );
                 }
             }
