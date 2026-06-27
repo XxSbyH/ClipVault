@@ -93,7 +93,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   textLimitKb: 100,
   imageCompression: 'high',
   themeMode: 'system',
-  launchOnStartup: false,
+  launchOnStartup: true,
   wheelShortcutEnabled: true,
   wheelShortcutModifier: 'ctrl',
   wheelShortcutScope: 'global'

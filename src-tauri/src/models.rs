@@ -206,7 +206,7 @@ impl Default for AppSettings {
             text_limit_kb: 100,
             image_compression: ImageCompression::High,
             theme_mode: ThemeMode::System,
-            launch_on_startup: false,
+            launch_on_startup: true,
             wheel_shortcut_enabled: true,
             wheel_shortcut_modifier: WheelShortcutModifier::Ctrl,
             wheel_shortcut_scope: WheelShortcutScope::Global,
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(settings.text_limit_kb, 100);
         assert_eq!(settings.image_compression, ImageCompression::High);
         assert_eq!(settings.theme_mode, ThemeMode::System);
-        assert!(!settings.launch_on_startup);
+        assert!(settings.launch_on_startup);
         assert!(settings.wheel_shortcut_enabled);
         assert_eq!(
             settings.wheel_shortcut_modifier,

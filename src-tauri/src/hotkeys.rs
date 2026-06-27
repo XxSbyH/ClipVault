@@ -228,9 +228,35 @@ pub fn head_id(items: &[ClipboardItem]) -> Option<i64> {
     items.first().map(|item| item.id)
 }
 
-pub fn register_global_shortcuts(app: &AppHandle) -> AppResult<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupHotkeyRegistrationStatus {
+    Registered,
+    Degraded { error: String },
+}
+
+pub fn handle_startup_hotkey_registration_result(
+    result: AppResult<()>,
+) -> StartupHotkeyRegistrationStatus {
+    match result {
+        Ok(()) => StartupHotkeyRegistrationStatus::Registered,
+        Err(error) => {
+            let error = error.to_string();
+            tracing::error!(
+                target: "hotkeys",
+                area = "hotkey",
+                direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
+                "global keyboard shortcuts unavailable during startup; startup continues: {error}"
+            );
+            StartupHotkeyRegistrationStatus::Degraded { error }
+        }
+    }
+}
+
+pub fn register_global_shortcuts(app: &AppHandle) -> StartupHotkeyRegistrationStatus {
     let state = app.state::<AppState>();
-    replace_all_keyboard_shortcuts(app, state.inner())?;
+    let keyboard_status = handle_startup_hotkey_registration_result(
+        replace_all_keyboard_shortcuts(app, state.inner()),
+    );
     if let Err(error) = start_wheel_hook(app) {
         tracing::warn!(
             target: "hotkeys",
@@ -247,7 +273,7 @@ pub fn register_global_shortcuts(app: &AppHandle) -> AppResult<()> {
             "cut capture hook failed to start; clipboard polling remains available: {error}"
         );
     }
-    Ok(())
+    keyboard_status
 }
 
 pub fn replace_all_keyboard_shortcuts(app: &AppHandle, state: &AppState) -> AppResult<()> {
@@ -1631,6 +1657,22 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("invalid hotkey"));
+    }
+
+    #[test]
+    fn startup_hotkey_registration_conflicts_are_non_fatal() {
+        let result = handle_startup_hotkey_registration_result(Err(AppError::from(
+            "failed to register hotkey CommandOrControl+Shift+C: HotKey already registered",
+        )));
+
+        assert_eq!(
+            result,
+            StartupHotkeyRegistrationStatus::Degraded {
+                error:
+                    "failed to register hotkey CommandOrControl+Shift+C: HotKey already registered"
+                        .to_string()
+            }
+        );
     }
 
     #[test]

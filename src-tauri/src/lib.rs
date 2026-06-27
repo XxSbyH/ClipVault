@@ -299,21 +299,30 @@ pub fn run() {
                 "created",
             );
 
-            if let Err(error) = hotkeys::register_global_shortcuts(app.handle()) {
-                logger::startup_error(
-                    "hotkey_register",
-                    "hotkey",
-                    "check global hotkey conflicts, Windows hook permissions, or input subsystem",
-                    &error,
-                );
-                return Err(Box::new(error));
+            match hotkeys::register_global_shortcuts(app.handle()) {
+                hotkeys::StartupHotkeyRegistrationStatus::Registered => {
+                    logger::startup_ok(
+                        "hotkey_register",
+                        "hotkey",
+                        "global shortcuts registered",
+                        "registered",
+                    );
+                }
+                hotkeys::StartupHotkeyRegistrationStatus::Degraded { error } => {
+                    logger::startup_error(
+                        "hotkey_register",
+                        "hotkey",
+                        "global shortcuts unavailable; startup continues so hotkeys can be changed in settings",
+                        &error,
+                    );
+                    logger::startup_info(
+                        "hotkey_register",
+                        "hotkey",
+                        "startup continued without global keyboard shortcuts",
+                        "degraded",
+                    );
+                }
             }
-            logger::startup_ok(
-                "hotkey_register",
-                "hotkey",
-                "global shortcuts registered",
-                "registered",
-            );
 
             if autostart::should_show_main_window_for_env_args() {
                 logger::startup_info(
