@@ -23,6 +23,8 @@ use crate::{
 const MONITOR_INTERVAL_MS: u64 = 800;
 const IMAGE_SCAN_INTERVAL_MS: i64 = 1200;
 const BLACKLIST_CHECK_INTERVAL_MS: i64 = 3000;
+const IGNORED_CLIPBOARD_RETENTION_MS: i64 = 120_000;
+const IGNORED_CLIPBOARD_MAX_ENTRIES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CaptureDecision {
@@ -44,9 +46,23 @@ pub enum CaptureSkipReason {
 #[derive(Debug, Default)]
 pub struct ClipboardMonitor {
     last_hash: String,
+    last_sequence: Option<u32>,
     next_image_scan_at: i64,
     next_blacklist_check_at: i64,
     blacklist_apps: Vec<BlacklistApp>,
+    ignored_clipboard_sequences: Vec<IgnoredClipboardSequence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IgnoredClipboardSequence {
+    sequence: u32,
+    ignored_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipboardSequenceDecision {
+    New,
+    AlreadySeen,
 }
 
 impl ClipboardMonitor {
@@ -56,6 +72,54 @@ impl ClipboardMonitor {
 
     fn remember_hash(&mut self, hash: String) {
         self.last_hash = hash;
+    }
+
+    fn begin_clipboard_sequence(
+        &mut self,
+        sequence: Option<u32>,
+        now: i64,
+    ) -> ClipboardSequenceDecision {
+        let Some(sequence) = sequence else {
+            return ClipboardSequenceDecision::New;
+        };
+        self.prune_ignored_clipboard_sequences(now);
+        if self.last_sequence == Some(sequence)
+            || self
+                .ignored_clipboard_sequences
+                .iter()
+                .any(|entry| entry.sequence == sequence)
+        {
+            self.last_sequence = Some(sequence);
+            return ClipboardSequenceDecision::AlreadySeen;
+        }
+        ClipboardSequenceDecision::New
+    }
+
+    fn remember_clipboard_sequence(&mut self, sequence: Option<u32>) {
+        if let Some(sequence) = sequence {
+            self.last_sequence = Some(sequence);
+        }
+    }
+
+    fn remember_ignored_clipboard_sequence(&mut self, sequence: u32, now: i64) {
+        self.prune_ignored_clipboard_sequences(now);
+        self.ignored_clipboard_sequences
+            .retain(|entry| entry.sequence != sequence);
+        self.ignored_clipboard_sequences
+            .push(IgnoredClipboardSequence {
+                sequence,
+                ignored_at: now,
+            });
+        if self.ignored_clipboard_sequences.len() > IGNORED_CLIPBOARD_MAX_ENTRIES {
+            let overflow = self.ignored_clipboard_sequences.len() - IGNORED_CLIPBOARD_MAX_ENTRIES;
+            self.ignored_clipboard_sequences.drain(0..overflow);
+        }
+        self.last_sequence = Some(sequence);
+    }
+
+    fn prune_ignored_clipboard_sequences(&mut self, now: i64) {
+        self.ignored_clipboard_sequences
+            .retain(|entry| now - entry.ignored_at <= IGNORED_CLIPBOARD_RETENTION_MS);
     }
 }
 
@@ -166,9 +230,21 @@ pub fn build_text_insert_input(
 }
 
 fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> AppResult<()> {
+    let sequence = clipboard_sequence_number();
+    let now = now_millis();
+    if matches!(
+        monitor.begin_clipboard_sequence(sequence, now),
+        ClipboardSequenceDecision::AlreadySeen
+    ) {
+        return Ok(());
+    }
+
     let settings = state.repository().get_settings()?;
 
     if settings.enable_blacklist && is_blacklisted(app, state, monitor)? {
+        if let Some(sequence) = sequence {
+            monitor.remember_ignored_clipboard_sequence(sequence, now);
+        }
         return Ok(());
     }
 
@@ -182,6 +258,7 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
             CaptureDecision::Insert { input, hash } => {
                 let formats = read_supported_formats_for_capture();
                 insert_and_emit_with_formats(app, state, *input, hash, monitor, formats)?;
+                monitor.remember_clipboard_sequence(sequence);
                 return Ok(());
             }
             CaptureDecision::Skip(CaptureSkipReason::Duplicate) => {
@@ -193,25 +270,30 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
                     {
                         emit_history_revision(app, state);
                     }
+                    monitor.remember_clipboard_sequence(sequence);
                     return Ok(());
                 }
+                monitor.remember_clipboard_sequence(sequence);
             }
-            CaptureDecision::Skip(_) => {}
+            CaptureDecision::Skip(_) => {
+                monitor.remember_clipboard_sequence(sequence);
+            }
         }
     }
 
-    let now = now_millis();
     if now < monitor.next_image_scan_at {
         return Ok(());
     }
 
     let Ok(image) = app.clipboard().read_image() else {
         monitor.next_image_scan_at = now + IMAGE_SCAN_INTERVAL_MS;
+        monitor.remember_clipboard_sequence(sequence);
         return Ok(());
     };
     let png = image::encode_rgba_png(image.rgba(), image.width(), image.height())?;
     let hash = hash_bytes(&png);
     if hash == monitor.last_hash() {
+        monitor.remember_clipboard_sequence(sequence);
         return Ok(());
     }
 
@@ -248,6 +330,7 @@ fn tick(app: &AppHandle, state: &AppState, monitor: &mut ClipboardMonitor) -> Ap
         monitor,
         formats,
     )?;
+    monitor.remember_clipboard_sequence(sequence);
     monitor.next_image_scan_at = 0;
     Ok(())
 }
@@ -457,6 +540,23 @@ fn now_millis() -> i64 {
         .unwrap_or_default()
 }
 
+#[cfg(target_os = "windows")]
+fn clipboard_sequence_number() -> Option<u32> {
+    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+
+    let sequence = unsafe { GetClipboardSequenceNumber() };
+    if sequence == 0 {
+        None
+    } else {
+        Some(sequence)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clipboard_sequence_number() -> Option<u32> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,6 +634,33 @@ mod tests {
         assert!(!first);
         assert!(second);
         assert_eq!(loads, 1);
+    }
+
+    #[test]
+    fn blacklisted_clipboard_sequence_is_ignored_after_foreground_changes() {
+        let mut monitor = ClipboardMonitor::default();
+        let sequence = 42;
+
+        monitor.remember_ignored_clipboard_sequence(sequence, 100);
+
+        assert_eq!(
+            monitor.begin_clipboard_sequence(Some(sequence), 101),
+            ClipboardSequenceDecision::AlreadySeen
+        );
+    }
+
+    #[test]
+    fn ignored_clipboard_sequence_expires_after_retention_window() {
+        let mut monitor = ClipboardMonitor::default();
+        let sequence = 42;
+
+        monitor.remember_ignored_clipboard_sequence(sequence, 100);
+        monitor.last_sequence = None;
+
+        assert_eq!(
+            monitor.begin_clipboard_sequence(Some(sequence), 120_101),
+            ClipboardSequenceDecision::New
+        );
     }
 
     #[test]
