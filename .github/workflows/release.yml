@@ -7,6 +7,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to publish, for example v2.1.8'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -41,6 +46,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate release metadata
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json).version
+          $expectedTag = "v$version"
+          if ($env:RELEASE_TAG -ne $expectedTag) {
+            throw "Release tag $env:RELEASE_TAG does not match package version $expectedTag"
+          }
+
+          $releaseNotes = "docs/releases/$env:RELEASE_TAG.md"
+          if (!(Test-Path $releaseNotes)) {
+            throw "Missing release notes: $releaseNotes"
+          }
+
       - name: Typecheck renderer
         run: pnpm typecheck
 
@@ -56,7 +79,25 @@ jobs:
       - name: Lint Rust
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 
+      - name: Validate updater signing secrets
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'Missing repository secret: TAURI_SIGNING_PRIVATE_KEY'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw 'Missing repository secret: TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
+          }
+
       - name: Build Windows artifact
+        env:
+          CARGO_BUILD_JOBS: 1
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --bundles nsis
 
       - name: Stage Windows release assets
@@ -71,13 +112,35 @@ jobs:
           }
 
           $version = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json).version
-          $installer = Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' | Select-Object -First 1
+          $installer = Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter "ClipVault_${version}_x64-setup.exe" | Select-Object -First 1
           if ($null -eq $installer) {
-            throw 'Missing Windows NSIS installer'
+            throw "Missing Windows NSIS installer for version $version"
+          }
+
+          $signatureFile = "$($installer.FullName).sig"
+          if (!(Test-Path $signatureFile)) {
+            throw "Missing Windows updater signature: $signatureFile"
+          }
+
+          $releaseInstallerName = "ClipVault_${version}_windows_x64_setup.exe"
+          $signature = (Get-Content -Raw -LiteralPath $signatureFile).Trim()
+          $downloadUrl = "https://github.com/${{ github.repository }}/releases/latest/download/$releaseInstallerName"
+          $latest = [ordered]@{
+            version = $version
+            notes = '新增最近历史快捷键、托盘左键打开/右键菜单、启动后自动检查更新。'
+            pub_date = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = [ordered]@{
+              'windows-x86_64' = [ordered]@{
+                signature = $signature
+                url = $downloadUrl
+              }
+            }
           }
 
           Copy-Item -LiteralPath $appExe -Destination "release-assets/ClipVault_${version}_windows_x64_portable.exe"
-          Copy-Item -LiteralPath $installer.FullName -Destination "release-assets/ClipVault_${version}_windows_x64_setup.exe"
+          Copy-Item -LiteralPath $installer.FullName -Destination "release-assets/$releaseInstallerName"
+          Copy-Item -LiteralPath $signatureFile -Destination "release-assets/$releaseInstallerName.sig"
+          $latest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -LiteralPath 'release-assets/latest.json'
           Get-ChildItem -LiteralPath release-assets | Format-Table Name,Length
 
       - name: Upload workflow artifact
@@ -115,7 +178,29 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate release metadata
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="v${VERSION}"
+          if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ]; then
+            echo "::error::Release tag $RELEASE_TAG does not match package version $EXPECTED_TAG"
+            exit 1
+          fi
+
+          RELEASE_NOTES="docs/releases/${RELEASE_TAG}.md"
+          if [ ! -f "$RELEASE_NOTES" ]; then
+            echo "::error::Missing release notes: $RELEASE_NOTES"
+            exit 1
+          fi
+
       - name: Build macOS artifact
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target universal-apple-darwin --bundles app,dmg --no-sign
 
       - name: Archive macOS app bundle
@@ -163,9 +248,14 @@ jobs:
     needs:
       - windows
       - macos
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -187,6 +277,8 @@ jobs:
           required_patterns=(
             'ClipVault_*_windows_x64_portable.exe'
             'ClipVault_*_windows_x64_setup.exe'
+            'ClipVault_*_windows_x64_setup.exe.sig'
+            'latest.json'
             'ClipVault_*_macos_universal.dmg'
             'ClipVault_*_macos_universal.app.zip'
           )
@@ -198,26 +290,30 @@ jobs:
             fi
           done
 
+          release_notes="docs/releases/${RELEASE_TAG}.md"
+          if [ ! -f "$release_notes" ]; then
+            echo "::error::Missing release notes: $release_notes"
+            exit 1
+          fi
+
+          version=$(node -p "require('./package.json').version")
+          expected_tag="v${version}"
+          if [ "$RELEASE_TAG" != "$expected_tag" ]; then
+            echo "::error::Release tag $RELEASE_TAG does not match package version $expected_tag"
+            exit 1
+          fi
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ClipVault ${{ github.ref_name }}
-          body: |
-            更新内容：
-            - 修复 HUD 使用快捷键切换上一项/下一项时标题仍显示“快速粘贴”的文案问题，统一为“快速复制”。
-            - 同步更新应用版本号到 2.1.5。
-
-            发布文件：
-            - `ClipVault_*_windows_x64_setup.exe`：Windows 安装包，推荐大多数 Windows 用户直接下载并安装。
-            - `ClipVault_*_windows_x64_portable.exe`：Windows 便携版，适合不想安装、直接运行或随身携带。
-            - `ClipVault_*_macos_universal.dmg`：macOS 安装镜像，适合 macOS 用户按系统方式安装。
-            - `ClipVault_*_macos_universal.app.zip`：macOS 便携压缩包，适合手动解压使用。
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ClipVault ${{ env.RELEASE_TAG }}
+          body_path: docs/releases/${{ env.RELEASE_TAG }}.md
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
+          generate_release_notes: false
           overwrite_files: true
           files: release-assets/*
           fail_on_unmatched_files: true
