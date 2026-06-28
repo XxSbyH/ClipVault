@@ -191,6 +191,16 @@ git tag -a vX.Y.Z -m "ClipVault vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
+### 自动更新发布要求
+
+自动更新依赖 Tauri updater 签名。私钥不得提交到仓库。
+
+1. 使用 `.\node_modules\.bin\tauri.CMD signer generate -w D:\rj\tauri-updater\clipvault.key` 生成签名密钥。
+2. 将 `D:\rj\tauri-updater\clipvault.key.pub` 的公钥内容写入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。
+3. 发布构建时设置 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。本机内存紧张时同时设置 `CARGO_BUILD_JOBS=1`。
+4. Release 必须上传安装包、签名文件和 `latest.json`。
+5. 已发布版本号必须同步 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 和应用内展示版本。
+
 ### 其他
 
 感谢 [LINUX DO 社区](https://linux.do/) 对开源项目分享和交流的支持。

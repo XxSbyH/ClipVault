@@ -122,6 +122,32 @@ pub fn run() {
         "dialog plugin registered",
         "register_ok",
     );
+    logger::startup_info(
+        "process_plugin",
+        "tauri_plugin",
+        "register process plugin for updater relaunch support",
+        "register_start",
+    );
+    let builder = builder.plugin(tauri_plugin_process::init());
+    logger::startup_ok(
+        "process_plugin",
+        "tauri_plugin",
+        "process plugin registered",
+        "register_ok",
+    );
+    logger::startup_info(
+        "updater_plugin",
+        "tauri_plugin",
+        "register updater plugin for signed release checks and installs",
+        "register_start",
+    );
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    logger::startup_ok(
+        "updater_plugin",
+        "tauri_plugin",
+        "updater plugin registered",
+        "register_ok",
+    );
 
     let result = builder
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
@@ -402,9 +428,11 @@ pub fn run() {
             commands::update_fixed_content,
             commands::delete_fixed_content,
             commands::get_hotkeys,
+            commands::get_recent_history_hotkeys,
             commands::check_hotkey_conflicts,
             commands::check_hotkey_available,
             commands::update_hotkeys,
+            commands::update_recent_history_hotkey,
             commands::clear_history,
             commands::export_history,
             commands::import_history,

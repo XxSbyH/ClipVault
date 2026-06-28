@@ -276,6 +276,35 @@ describe('clipboardApi Tauri adapter', () => {
     expect(invokeMock).toHaveBeenLastCalledWith('delete_fixed_content', { id: 1 });
   });
 
+  it('calls recent history hotkey commands', async () => {
+    const { clipboardApi } = await import('./tauriApi');
+    invokeMock
+      .mockResolvedValueOnce([
+        { slot: 1, hotkey: 'Ctrl+Alt+1', enabled: true },
+        { slot: 2, hotkey: '', enabled: false }
+      ])
+      .mockResolvedValueOnce([
+        { slot: 1, hotkey: 'Ctrl+Alt+1', enabled: true },
+        { slot: 2, hotkey: 'Ctrl+Alt+2', enabled: true }
+      ]);
+
+    await expect(clipboardApi.getRecentHistoryHotkeys()).resolves.toEqual([
+      { slot: 1, hotkey: 'Ctrl+Alt+1', enabled: true },
+      { slot: 2, hotkey: '', enabled: false }
+    ]);
+    await expect(
+      clipboardApi.updateRecentHistoryHotkey({ slot: 2, hotkey: 'Ctrl+Alt+2', enabled: true })
+    ).resolves.toEqual([
+      { slot: 1, hotkey: 'Ctrl+Alt+1', enabled: true },
+      { slot: 2, hotkey: 'Ctrl+Alt+2', enabled: true }
+    ]);
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_recent_history_hotkeys');
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'update_recent_history_hotkey', {
+      input: { slot: 2, hotkey: 'Ctrl+Alt+2', enabled: true }
+    });
+  });
+
   it('does not call listener handlers after unsubscribe even if Tauri resolves later', async () => {
     const item = makeItem(5);
     const unlisten = vi.fn();

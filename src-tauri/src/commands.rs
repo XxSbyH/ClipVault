@@ -24,8 +24,8 @@ use crate::{
     models::{
         AppSettings, BlacklistApp, ClipboardContentType, ClipboardInsertInput, ClipboardItem,
         FixedContent, FixedContentInput, HotkeySettings, HotkeySettingsPatch, HudDirection,
-        HudPayload, MonitoringStatus, QuickPasteCursorPayload, SpecialPasteAction,
-        WheelShortcutModifier, WheelShortcutScope,
+        HudPayload, MonitoringStatus, QuickPasteCursorPayload, RecentHistoryHotkey,
+        RecentHistoryHotkeyInput, SpecialPasteAction, WheelShortcutModifier, WheelShortcutScope,
     },
     paste, settings, text_transform, windows,
 };
@@ -196,6 +196,7 @@ pub struct HotkeyAvailability {
 struct KeyboardShortcutSnapshot {
     settings: HotkeySettings,
     fixed_contents: Vec<FixedContent>,
+    recent_history_hotkeys: Vec<RecentHistoryHotkey>,
 }
 
 struct TextHistoryInput {
@@ -536,6 +537,15 @@ pub fn validate_fixed_content_hotkey_conflicts(
             &content.hotkey,
         )?;
     }
+    for item in state.repository().get_recent_history_hotkeys()? {
+        if item.enabled && !item.hotkey.trim().is_empty() {
+            add_hotkey_assignment(
+                &mut assignments,
+                &format!("recent history slot {}", item.slot),
+                &item.hotkey,
+            )?;
+        }
+    }
 
     add_hotkey_assignment(&mut assignments, "fixed content candidate", &input.hotkey)
 }
@@ -556,7 +566,65 @@ pub fn validate_hotkey_settings_conflicts_with_fixed_contents(
             )?;
         }
     }
+    for item in state.repository().get_recent_history_hotkeys()? {
+        if item.enabled && !item.hotkey.trim().is_empty() {
+            add_hotkey_assignment(
+                &mut assignments,
+                &format!("recent history slot {}", item.slot),
+                &item.hotkey,
+            )?;
+        }
+    }
     Ok(())
+}
+
+pub fn get_recent_history_hotkeys_impl(state: &AppState) -> AppResult<Vec<RecentHistoryHotkey>> {
+    state.repository().get_recent_history_hotkeys()
+}
+
+pub fn update_recent_history_hotkey_impl(
+    state: &AppState,
+    input: RecentHistoryHotkeyInput,
+) -> AppResult<Vec<RecentHistoryHotkey>> {
+    validate_recent_history_hotkey_conflicts(state, &input)?;
+    state.repository().update_recent_history_hotkey(&input)
+}
+
+pub fn validate_recent_history_hotkey_conflicts(
+    state: &AppState,
+    input: &RecentHistoryHotkeyInput,
+) -> AppResult<()> {
+    if !input.enabled || input.hotkey.trim().is_empty() {
+        return Ok(());
+    }
+
+    let settings = state.repository().get_hotkey_settings()?;
+    let fixed_contents = state.repository().list_fixed_contents()?;
+    let recent_hotkeys = state.repository().get_recent_history_hotkeys()?;
+    let mut assignments = BTreeMap::new();
+    add_hotkey_settings_assignments(&mut assignments, &settings)?;
+    for content in fixed_contents.iter().filter(|content| content.enabled) {
+        add_hotkey_assignment(
+            &mut assignments,
+            &format!("fixed content {}", content.id),
+            &content.hotkey,
+        )?;
+    }
+    for item in recent_hotkeys
+        .iter()
+        .filter(|item| item.enabled && item.slot != input.slot && !item.hotkey.trim().is_empty())
+    {
+        add_hotkey_assignment(
+            &mut assignments,
+            &format!("recent history slot {}", item.slot),
+            &item.hotkey,
+        )?;
+    }
+    add_hotkey_assignment(
+        &mut assignments,
+        &format!("recent history slot {}", input.slot),
+        &input.hotkey,
+    )
 }
 
 pub fn list_fixed_contents_impl(state: &AppState) -> AppResult<Vec<FixedContent>> {
@@ -695,6 +763,13 @@ pub fn check_hotkey_conflicts_with_state_impl(
         for content in fixed_contents {
             if content.enabled {
                 entries.push((format!("fixed content {}", content.id), content.hotkey));
+            }
+        }
+    }
+    if let Ok(recent_hotkeys) = state.repository().get_recent_history_hotkeys() {
+        for item in recent_hotkeys {
+            if item.enabled && !item.hotkey.trim().is_empty() {
+                entries.push((format!("recent history slot {}", item.slot), item.hotkey));
             }
         }
     }
@@ -1173,6 +1248,7 @@ pub fn update_fixed_content(
 
     let settings = state.repository().get_hotkey_settings()?;
     let mut fixed_contents = state.repository().list_fixed_contents()?;
+    let recent_history_hotkeys = state.repository().get_recent_history_hotkeys()?;
     let mut found = false;
     for content in &mut fixed_contents {
         if content.id == id {
@@ -1188,9 +1264,12 @@ pub fn update_fixed_content(
         return Err(AppError::from(format!("fixed content {id} not found")));
     }
 
-    if let Err(error) =
-        hotkeys::replace_keyboard_shortcuts_with_fixed_contents(&app, &settings, &fixed_contents)
-    {
+    if let Err(error) = hotkeys::replace_keyboard_shortcuts_with_recent_history(
+        &app,
+        &settings,
+        &fixed_contents,
+        &recent_history_hotkeys,
+    ) {
         if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
             return Err(with_restore_error(error, restore_error));
         }
@@ -1212,6 +1291,7 @@ pub fn update_fixed_content(
 pub fn delete_fixed_content(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<()> {
     let settings = state.repository().get_hotkey_settings()?;
     let fixed_contents = state.repository().list_fixed_contents()?;
+    let recent_history_hotkeys = state.repository().get_recent_history_hotkeys()?;
     if !fixed_contents.iter().any(|content| content.id == id) {
         return Err(AppError::from(format!("fixed content {id} not found")));
     }
@@ -1220,10 +1300,11 @@ pub fn delete_fixed_content(app: AppHandle, state: State<'_, AppState>, id: i64)
         .filter(|content| content.id != id)
         .collect();
 
-    if let Err(error) = hotkeys::replace_keyboard_shortcuts_with_fixed_contents(
+    if let Err(error) = hotkeys::replace_keyboard_shortcuts_with_recent_history(
         &app,
         &settings,
         &candidate_contents,
+        &recent_history_hotkeys,
     ) {
         if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
             return Err(with_restore_error(error, restore_error));
@@ -1245,6 +1326,13 @@ pub fn delete_fixed_content(app: AppHandle, state: State<'_, AppState>, id: i64)
 #[tauri::command]
 pub fn get_hotkeys(state: State<'_, AppState>) -> AppResult<HotkeySettings> {
     state.repository().get_hotkey_settings()
+}
+
+#[tauri::command]
+pub fn get_recent_history_hotkeys(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<RecentHistoryHotkey>> {
+    get_recent_history_hotkeys_impl(state.inner())
 }
 
 #[tauri::command]
@@ -1270,15 +1358,17 @@ pub fn update_hotkeys(
     let candidate = build_hotkey_settings_candidate(&current, &patch)?;
     validate_hotkey_settings_conflicts_with_fixed_contents(state.inner(), &candidate)?;
     let fixed_contents = state.repository().list_fixed_contents()?;
+    let recent_history_hotkeys = state.repository().get_recent_history_hotkeys()?;
     let required_commands = hotkey_patch_entries(&patch)
         .into_iter()
         .map(|(command, _)| command)
         .collect::<Vec<_>>();
 
-    if let Err(error) = hotkeys::replace_keyboard_shortcuts_with_fixed_contents_requiring_commands(
+    if let Err(error) = hotkeys::replace_keyboard_shortcuts_with_recent_history_requiring_commands(
         &app,
         &candidate,
         &fixed_contents,
+        &recent_history_hotkeys,
         &required_commands,
     ) {
         if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
@@ -1296,6 +1386,38 @@ pub fn update_hotkeys(
             if let Err(restore_error) = restore_all_keyboard_shortcuts(&app, state.inner()) {
                 return Err(with_restore_error(error, restore_error));
             }
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn update_recent_history_hotkey(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: RecentHistoryHotkeyInput,
+) -> AppResult<Vec<RecentHistoryHotkey>> {
+    let current = state.repository().get_recent_history_hotkeys()?;
+    let mut candidate = current.clone();
+    if let Some(slot) = candidate.iter_mut().find(|item| item.slot == input.slot) {
+        slot.hotkey = input.hotkey.trim().to_string();
+        slot.enabled = input.enabled;
+    }
+    validate_recent_history_hotkey_conflicts(state.inner(), &input)?;
+
+    let settings = state.repository().get_hotkey_settings()?;
+    let fixed_contents = state.repository().list_fixed_contents()?;
+    crate::hotkeys::replace_keyboard_shortcuts_with_recent_history(
+        &app,
+        &settings,
+        &fixed_contents,
+        &candidate,
+    )?;
+
+    match update_recent_history_hotkey_impl(state.inner(), input) {
+        Ok(updated) => Ok(updated),
+        Err(error) => {
+            let _ = crate::hotkeys::replace_all_keyboard_shortcuts(&app, state.inner());
             Err(error)
         }
     }
@@ -1503,6 +1625,7 @@ fn keyboard_shortcut_snapshot(state: &AppState) -> AppResult<KeyboardShortcutSna
     Ok(KeyboardShortcutSnapshot {
         settings: state.repository().get_hotkey_settings()?,
         fixed_contents: state.repository().list_fixed_contents()?,
+        recent_history_hotkeys: state.repository().get_recent_history_hotkeys()?,
     })
 }
 
@@ -1510,10 +1633,11 @@ fn restore_keyboard_shortcuts_from_snapshot(
     app: &AppHandle,
     snapshot: &KeyboardShortcutSnapshot,
 ) -> AppResult<()> {
-    hotkeys::replace_keyboard_shortcuts_with_fixed_contents(
+    hotkeys::replace_keyboard_shortcuts_with_recent_history(
         app,
         &snapshot.settings,
         &snapshot.fixed_contents,
+        &snapshot.recent_history_hotkeys,
     )
 }
 
@@ -1688,7 +1812,7 @@ mod tests {
         errors::AppError,
         models::{
             ClipboardContentType, ClipboardInsertInput, ClipboardMetadata, FixedContentInput,
-            HotkeySettingsPatch, SpecialPasteAction,
+            HotkeySettingsPatch, RecentHistoryHotkeyInput, SpecialPasteAction,
         },
     };
 
@@ -2324,6 +2448,41 @@ mod tests {
         assert!(
             super::validate_fixed_content_hotkey_conflicts(&state, None, &disabled_input).is_ok()
         );
+    }
+
+    #[test]
+    fn recent_history_hotkey_conflict_detects_normal_hotkey() {
+        let state = super::AppState::new(repo());
+
+        let error = super::update_recent_history_hotkey_impl(
+            &state,
+            RecentHistoryHotkeyInput {
+                slot: 1,
+                hotkey: "CommandOrControl+Shift+V".to_string(),
+                enabled: true,
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("assigned to both"));
+    }
+
+    #[test]
+    fn recent_history_hotkey_update_saves_enabled_slot() {
+        let state = super::AppState::new(repo());
+
+        let updated = super::update_recent_history_hotkey_impl(
+            &state,
+            RecentHistoryHotkeyInput {
+                slot: 1,
+                hotkey: "Ctrl+Alt+1".to_string(),
+                enabled: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(updated[0].hotkey, "Ctrl+Alt+1");
+        assert!(updated[0].enabled);
     }
 
     #[test]

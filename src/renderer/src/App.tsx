@@ -7,6 +7,7 @@ import { useClipboardData } from '@/hooks/useClipboard';
 import { useSearch } from '@/hooks/useSearch';
 import { useThemeMode } from '@/hooks/useThemeMode';
 import { clipboardApi } from '@/lib/tauriApi';
+import { checkForUpdateOnStartup } from '@/lib/updater';
 
 type SettingsTab = 'general' | 'privacy' | 'storage' | 'hotkeys' | 'about';
 type FixedContentPrefill = { title: string; content: string; nonce: number };
@@ -20,6 +21,10 @@ export default function App(): JSX.Element {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [fixedContentPrefill, setFixedContentPrefill] = useState<FixedContentPrefill | null>(null);
   const [monitoring, setMonitoring] = useState(true);
+
+  useEffect(() => {
+    void checkForUpdateOnStartup();
+  }, []);
 
   useEffect(() => {
     const offOpenSettings = clipboardApi.onOpenSettings(() => {

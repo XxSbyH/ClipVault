@@ -1,9 +1,13 @@
+import type { ButtonHTMLAttributes } from 'react';
+
 import { cn } from '@/lib/utils';
 
 export function Switch({
   checked,
-  onCheckedChange
-}: {
+  onCheckedChange,
+  className,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
 }): JSX.Element {
@@ -14,9 +18,11 @@ export function Switch({
       aria-checked={checked}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        'relative h-6 w-10 shrink-0 rounded-full transition-colors',
-        checked ? 'bg-primary' : 'bg-muted'
+        'relative h-6 w-10 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        checked ? 'bg-primary' : 'bg-muted',
+        className
       )}
+      {...props}
     >
       <span
         className={cn(

@@ -147,6 +147,34 @@ pub struct FixedContentInput {
     pub enabled: bool,
 }
 
+pub const RECENT_HISTORY_HOTKEY_SLOT_COUNT: u8 = 10;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentHistoryHotkey {
+    pub slot: u8,
+    pub hotkey: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentHistoryHotkeyInput {
+    pub slot: u8,
+    pub hotkey: String,
+    pub enabled: bool,
+}
+
+pub fn default_recent_history_hotkeys() -> Vec<RecentHistoryHotkey> {
+    (1..=RECENT_HISTORY_HOTKEY_SLOT_COUNT)
+        .map(|slot| RecentHistoryHotkey {
+            slot,
+            hotkey: String::new(),
+            enabled: false,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageCompression {
@@ -470,6 +498,33 @@ mod tests {
         assert_eq!(hotkeys.clear, "CommandOrControl+Shift+C");
         assert_eq!(hotkeys.quick_paste_prev, "Ctrl+Alt+Left");
         assert_eq!(hotkeys.quick_paste_next, "Ctrl+Alt+Right");
+    }
+
+    #[test]
+    fn serializes_recent_history_hotkey_as_camel_case() {
+        let hotkey = RecentHistoryHotkey {
+            slot: 1,
+            hotkey: "Ctrl+Alt+1".to_string(),
+            enabled: true,
+        };
+
+        let value = serde_json::to_value(hotkey).unwrap();
+
+        assert_eq!(value["slot"], json!(1));
+        assert_eq!(value["hotkey"], json!("Ctrl+Alt+1"));
+        assert_eq!(value["enabled"], json!(true));
+    }
+
+    #[test]
+    fn default_recent_history_hotkeys_are_unbound() {
+        let hotkeys = default_recent_history_hotkeys();
+
+        assert_eq!(hotkeys.len(), 10);
+        assert_eq!(hotkeys[0].slot, 1);
+        assert_eq!(hotkeys[9].slot, 10);
+        assert!(hotkeys
+            .iter()
+            .all(|item| item.hotkey.is_empty() && !item.enabled));
     }
 
     #[test]

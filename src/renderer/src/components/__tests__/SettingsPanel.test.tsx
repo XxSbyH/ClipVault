@@ -14,6 +14,7 @@ const {
   exportHistoryMock,
   getHistoryMock,
   getHotkeysMock,
+  getRecentHistoryHotkeysMock,
   getSettingsMock,
   importHistoryMock,
   listFixedContentsMock,
@@ -22,6 +23,7 @@ const {
   removeBlacklistMock,
   saveDialogMock,
   updateFixedContentMock,
+  updateRecentHistoryHotkeyMock,
   updateHotkeysMock,
   updateSettingMock
 } = vi.hoisted(() => ({
@@ -33,6 +35,7 @@ const {
   exportHistoryMock: vi.fn(),
   getHistoryMock: vi.fn(),
   getHotkeysMock: vi.fn(),
+  getRecentHistoryHotkeysMock: vi.fn(),
   getSettingsMock: vi.fn(),
   importHistoryMock: vi.fn(),
   listFixedContentsMock: vi.fn(),
@@ -41,6 +44,7 @@ const {
   removeBlacklistMock: vi.fn(),
   saveDialogMock: vi.fn(),
   updateFixedContentMock: vi.fn(),
+  updateRecentHistoryHotkeyMock: vi.fn(),
   updateHotkeysMock: vi.fn(),
   updateSettingMock: vi.fn()
 }));
@@ -61,12 +65,14 @@ vi.mock('@/lib/tauriApi', () => ({
     exportHistory: exportHistoryMock,
     getHistory: getHistoryMock,
     getHotkeys: getHotkeysMock,
+    getRecentHistoryHotkeys: getRecentHistoryHotkeysMock,
     getSettings: getSettingsMock,
     importHistory: importHistoryMock,
     listFixedContents: listFixedContentsMock,
     listBlacklist: listBlacklistMock,
     removeBlacklist: removeBlacklistMock,
     updateFixedContent: updateFixedContentMock,
+    updateRecentHistoryHotkey: updateRecentHistoryHotkeyMock,
     updateHotkeys: updateHotkeysMock,
     updateSetting: updateSettingMock
   }
@@ -135,6 +141,13 @@ describe('SettingsPanel', () => {
     getSettingsMock.mockResolvedValue(defaultSettings);
     listBlacklistMock.mockResolvedValue([]);
     getHotkeysMock.mockResolvedValue(DEFAULT_HOTKEYS);
+    getRecentHistoryHotkeysMock.mockResolvedValue(
+      Array.from({ length: 10 }, (_, index) => ({
+        slot: index + 1,
+        hotkey: '',
+        enabled: false
+      }))
+    );
     updateSettingMock.mockImplementation((key: keyof AppSettings, value: AppSettings[keyof AppSettings]) =>
       Promise.resolve({ ...defaultSettings, [key]: value })
     );
@@ -163,6 +176,15 @@ describe('SettingsPanel', () => {
     checkHotkeyAvailableMock.mockResolvedValue(true);
     updateHotkeysMock.mockImplementation((patch: Partial<HotkeySettings>) =>
       Promise.resolve({ ...DEFAULT_HOTKEYS, ...patch })
+    );
+    updateRecentHistoryHotkeyMock.mockImplementation((input) =>
+      Promise.resolve(
+        Array.from({ length: 10 }, (_, index) => ({
+          slot: index + 1,
+          hotkey: input.slot === index + 1 ? input.hotkey : '',
+          enabled: input.slot === index + 1 ? input.enabled : false
+        }))
+      )
     );
     useClipboardStore.setState({
       items: [],
@@ -205,7 +227,7 @@ describe('SettingsPanel', () => {
   it('shows the current release version in the about settings', async () => {
     renderPanel('about');
 
-    expect(await screen.findByText('ClipVault v2.1.7')).toBeInTheDocument();
+    expect(await screen.findByText('ClipVault v2.1.8')).toBeInTheDocument();
   });
 
   it('defaults history retention to permanent and can switch back to a limited duration', async () => {
@@ -360,6 +382,50 @@ describe('SettingsPanel', () => {
     expect(await screen.findByText('历史快速复制')).toBeInTheDocument();
     expect(screen.getByText('复制更旧的历史内容到剪贴板')).toBeInTheDocument();
     expect(screen.queryByText('快速粘贴')).not.toBeInTheDocument();
+  });
+
+  it('renders recent history hotkey slots and saves a slot shortcut', async () => {
+    renderPanel('hotkeys');
+
+    expect(await screen.findByText('最近十个历史记录')).toBeInTheDocument();
+    const positionOneLabel = screen.getByText('位置 1（最新）');
+    expect(screen.getByText('粘贴最近第 10 条历史记录')).toBeInTheDocument();
+
+    const positionOneRow = positionOneLabel.parentElement?.parentElement;
+    expect(positionOneRow).toBeTruthy();
+    fireEvent.click(within(positionOneRow as HTMLElement).getByRole('button', { name: '录制快捷键' }));
+    fireEvent.keyDown(window, { key: 'Control' });
+    fireEvent.keyDown(window, { key: 'Alt' });
+    fireEvent.keyDown(window, { key: '1' });
+    fireEvent.keyUp(window, { key: '1' });
+
+    await waitFor(() => {
+      expect(updateRecentHistoryHotkeyMock).toHaveBeenCalledWith({
+        slot: 1,
+        hotkey: 'Ctrl+Alt+1',
+        enabled: false
+      });
+    });
+  });
+
+  it('toggles a recent history hotkey slot', async () => {
+    getRecentHistoryHotkeysMock.mockResolvedValue(
+      Array.from({ length: 10 }, (_, index) => ({
+        slot: index + 1,
+        hotkey: index === 0 ? 'Ctrl+Alt+1' : '',
+        enabled: index === 0
+      }))
+    );
+
+    renderPanel('hotkeys');
+
+    fireEvent.click(await screen.findByRole('switch', { name: '启用位置 1 最近历史快捷键' }));
+
+    expect(updateRecentHistoryHotkeyMock).toHaveBeenCalledWith({
+      slot: 1,
+      hotkey: 'Ctrl+Alt+1',
+      enabled: false
+    });
   });
 
   it('marks hotkeys that are unavailable in the system', async () => {

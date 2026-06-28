@@ -12,10 +12,12 @@ use crate::database::migrations::{configure_connection, init_database};
 use crate::{
     errors::AppResult,
     models::{
-        AppSettings, BlacklistApp, ClipboardContentType, ClipboardFormatEncoding,
-        ClipboardFormatInput, ClipboardFormatPayload, ClipboardInsertInput, ClipboardItem,
-        ClipboardMetadata, FixedContent, FixedContentInput, HotkeySettings, HotkeySettingsPatch,
-        ImageCompression, ThemeMode, WheelShortcutModifier, WheelShortcutScope,
+        default_recent_history_hotkeys, AppSettings, BlacklistApp, ClipboardContentType,
+        ClipboardFormatEncoding, ClipboardFormatInput, ClipboardFormatPayload,
+        ClipboardInsertInput, ClipboardItem, ClipboardMetadata, FixedContent, FixedContentInput,
+        HotkeySettings, HotkeySettingsPatch, ImageCompression, RecentHistoryHotkey,
+        RecentHistoryHotkeyInput, ThemeMode, WheelShortcutModifier, WheelShortcutScope,
+        RECENT_HISTORY_HOTKEY_SLOT_COUNT,
     },
 };
 
@@ -156,6 +158,19 @@ impl Repository {
             .query_row(
                 "SELECT * FROM clipboard_items
                  ORDER BY is_pinned DESC, created_at DESC, id DESC
+                 LIMIT 1 OFFSET ?1",
+                params![offset],
+                map_clipboard_item,
+            )
+            .optional()?)
+    }
+
+    pub fn get_recent_history_by_offset(&self, offset: i64) -> AppResult<Option<ClipboardItem>> {
+        let conn = self.conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT * FROM clipboard_items
+                 ORDER BY created_at DESC, id DESC
                  LIMIT 1 OFFSET ?1",
                 params![offset],
                 map_clipboard_item,
@@ -518,6 +533,61 @@ impl Repository {
         }
 
         self.get_hotkey_settings()
+    }
+
+    pub fn get_recent_history_hotkeys(&self) -> AppResult<Vec<RecentHistoryHotkey>> {
+        let conn = self.conn()?;
+        let mut hotkeys = default_recent_history_hotkeys();
+        let mut stmt =
+            conn.prepare("SELECT key, value FROM settings WHERE key LIKE 'recentHistoryHotkey%'")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (key, value) = row?;
+            let Some(slot) = key
+                .strip_prefix("recentHistoryHotkey")
+                .and_then(|raw| raw.parse::<u8>().ok())
+            else {
+                continue;
+            };
+            if !(1..=RECENT_HISTORY_HOTKEY_SLOT_COUNT).contains(&slot) {
+                continue;
+            }
+            if let Ok(parsed) = serde_json::from_str::<RecentHistoryHotkey>(&value) {
+                if parsed.slot == slot {
+                    hotkeys[(slot - 1) as usize] = parsed;
+                }
+            }
+        }
+
+        Ok(hotkeys)
+    }
+
+    pub fn update_recent_history_hotkey(
+        &self,
+        input: &RecentHistoryHotkeyInput,
+    ) -> AppResult<Vec<RecentHistoryHotkey>> {
+        validate_recent_history_hotkey_input(input)?;
+        let key = format!("recentHistoryHotkey{}", input.slot);
+        let value = serde_json::to_string(&RecentHistoryHotkey {
+            slot: input.slot,
+            hotkey: input.hotkey.trim().to_string(),
+            enabled: input.enabled,
+        })?;
+
+        {
+            let conn = self.conn()?;
+            conn.execute(
+                "INSERT INTO settings (key, value, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                params![key, value, now_timestamp()],
+            )?;
+        }
+
+        self.get_recent_history_hotkeys()
     }
 
     pub fn list_fixed_contents(&self) -> AppResult<Vec<FixedContent>> {
@@ -935,6 +1005,16 @@ fn validate_hotkey_value(key: &str, value: &str) -> AppResult<String> {
     Ok(trimmed.to_string())
 }
 
+fn validate_recent_history_hotkey_input(input: &RecentHistoryHotkeyInput) -> AppResult<()> {
+    if !(1..=RECENT_HISTORY_HOTKEY_SLOT_COUNT).contains(&input.slot) {
+        return Err(format!("invalid recent history hotkey slot {}", input.slot).into());
+    }
+    if input.enabled && input.hotkey.trim().is_empty() {
+        return Err(format!("recent history hotkey slot {} cannot be empty", input.slot).into());
+    }
+    Ok(())
+}
+
 fn parse_hotkey_value(raw: &str) -> Option<String> {
     let parsed = serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.to_string());
     let trimmed = parsed.trim();
@@ -1091,7 +1171,7 @@ mod tests {
     use crate::models::{
         AppSettings, ClipboardContentType, ClipboardFormatEncoding, ClipboardFormatInput,
         ClipboardInsertInput, ClipboardMetadata, FixedContentInput, HotkeySettingsPatch,
-        ImageCompression, ThemeMode,
+        ImageCompression, RecentHistoryHotkeyInput, ThemeMode,
     };
 
     use super::Repository;
@@ -1133,6 +1213,48 @@ mod tests {
             hotkey: hotkey.to_string(),
             enabled,
         }
+    }
+
+    #[test]
+    fn recent_history_hotkeys_round_trip_with_per_slot_rows() {
+        let repo = repo();
+
+        let initial = repo.get_recent_history_hotkeys().unwrap();
+        assert_eq!(initial.len(), 10);
+        assert!(initial
+            .iter()
+            .all(|item| item.hotkey.is_empty() && !item.enabled));
+
+        let updated = repo
+            .update_recent_history_hotkey(&RecentHistoryHotkeyInput {
+                slot: 2,
+                hotkey: "Ctrl+Alt+2".to_string(),
+                enabled: true,
+            })
+            .unwrap();
+
+        assert_eq!(updated[1].slot, 2);
+        assert_eq!(updated[1].hotkey, "Ctrl+Alt+2");
+        assert!(updated[1].enabled);
+    }
+
+    #[test]
+    fn recent_history_lookup_ignores_pinned_priority() {
+        let repo = repo();
+        let old = repo
+            .insert_clipboard_item(text_input("old", "hash-recent-old"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let new = repo
+            .insert_clipboard_item(text_input("new", "hash-recent-new"))
+            .unwrap();
+        repo.toggle_pin(old.id).unwrap();
+
+        let newest = repo.get_recent_history_by_offset(0).unwrap().unwrap();
+        let second = repo.get_recent_history_by_offset(1).unwrap().unwrap();
+
+        assert_eq!(newest.id, new.id);
+        assert_eq!(second.id, old.id);
     }
 
     #[test]

@@ -13,7 +13,8 @@ use crate::{
     events,
     models::{
         AppSettings, ClipboardItem, FixedContent, HotkeySettings, HudDirection, HudPayload,
-        QuickPasteBoundary, QuickPasteCursorPayload, WheelShortcutModifier, WheelShortcutScope,
+        QuickPasteBoundary, QuickPasteCursorPayload, RecentHistoryHotkey, WheelShortcutModifier,
+        WheelShortcutScope,
     },
     paste, windows,
 };
@@ -201,6 +202,12 @@ enum QuickHistoryCopyResult {
     Empty,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum RecentHistorySlotResult {
+    Pasted(Box<commands::PasteResult>),
+    Empty,
+}
+
 enum QuickHistoryResolveResult {
     Item(Box<ClipboardItem>),
     Boundary(QuickPasteBoundary),
@@ -296,6 +303,14 @@ fn register_startup_keyboard_shortcuts(
             ]);
         }
     };
+    let recent_history_hotkeys = match state.repository().get_recent_history_hotkeys() {
+        Ok(hotkeys) => hotkeys,
+        Err(error) => {
+            return StartupHotkeyRegistrationStatus::from_failures(vec![
+                startup_hotkey_registration_failure("loadRecentHistoryHotkeys", "", error),
+            ]);
+        }
+    };
 
     if let Err(error) = app.global_shortcut().unregister_all() {
         return StartupHotkeyRegistrationStatus::from_failures(vec![
@@ -308,7 +323,7 @@ fn register_startup_keyboard_shortcuts(
     }
 
     register_startup_keyboard_shortcut_entries(
-        keyboard_shortcut_registrations(&settings, &fixed_contents),
+        keyboard_shortcut_registrations(&settings, &fixed_contents, &recent_history_hotkeys),
         |accelerator, action| register_shortcut(app, accelerator, action),
     )
 }
@@ -316,7 +331,13 @@ fn register_startup_keyboard_shortcuts(
 pub fn replace_all_keyboard_shortcuts(app: &AppHandle, state: &AppState) -> AppResult<()> {
     let settings = state.repository().get_hotkey_settings()?;
     let fixed_contents = state.repository().list_fixed_contents()?;
-    replace_keyboard_shortcuts_with_fixed_contents(app, &settings, &fixed_contents)
+    let recent_history_hotkeys = state.repository().get_recent_history_hotkeys()?;
+    replace_keyboard_shortcuts_with_recent_history(
+        app,
+        &settings,
+        &fixed_contents,
+        &recent_history_hotkeys,
+    )
 }
 
 pub fn replace_keyboard_shortcuts(app: &AppHandle, settings: &HotkeySettings) -> AppResult<()> {
@@ -328,13 +349,25 @@ pub fn replace_keyboard_shortcuts_with_fixed_contents(
     settings: &HotkeySettings,
     fixed_contents: &[FixedContent],
 ) -> AppResult<()> {
-    validate_keyboard_shortcuts(settings, fixed_contents)?;
+    replace_keyboard_shortcuts_with_recent_history(app, settings, fixed_contents, &[])
+}
+
+pub fn replace_keyboard_shortcuts_with_recent_history(
+    app: &AppHandle,
+    settings: &HotkeySettings,
+    fixed_contents: &[FixedContent],
+    recent_history_hotkeys: &[RecentHistoryHotkey],
+) -> AppResult<()> {
+    validate_keyboard_shortcuts(settings, fixed_contents, recent_history_hotkeys)?;
     app.global_shortcut()
         .unregister_all()
         .map_err(|err| AppError::from(format!("failed to unregister hotkeys: {err}")))?;
-    if let Err(error) =
-        register_keyboard_shortcuts_with_fixed_contents(app, settings, fixed_contents)
-    {
+    if let Err(error) = register_keyboard_shortcuts_with_recent_history(
+        app,
+        settings,
+        fixed_contents,
+        recent_history_hotkeys,
+    ) {
         let _ = app.global_shortcut().unregister_all();
         return Err(error);
     }
@@ -347,13 +380,29 @@ pub fn replace_keyboard_shortcuts_with_fixed_contents_requiring_commands(
     fixed_contents: &[FixedContent],
     required_commands: &[&str],
 ) -> AppResult<StartupHotkeyRegistrationStatus> {
-    validate_keyboard_shortcuts(settings, fixed_contents)?;
+    replace_keyboard_shortcuts_with_recent_history_requiring_commands(
+        app,
+        settings,
+        fixed_contents,
+        &[],
+        required_commands,
+    )
+}
+
+pub fn replace_keyboard_shortcuts_with_recent_history_requiring_commands(
+    app: &AppHandle,
+    settings: &HotkeySettings,
+    fixed_contents: &[FixedContent],
+    recent_history_hotkeys: &[RecentHistoryHotkey],
+    required_commands: &[&str],
+) -> AppResult<StartupHotkeyRegistrationStatus> {
+    validate_keyboard_shortcuts(settings, fixed_contents, recent_history_hotkeys)?;
     app.global_shortcut()
         .unregister_all()
         .map_err(|err| AppError::from(format!("failed to unregister hotkeys: {err}")))?;
 
     match register_required_keyboard_shortcut_entries(
-        keyboard_shortcut_registrations(settings, fixed_contents),
+        keyboard_shortcut_registrations(settings, fixed_contents, recent_history_hotkeys),
         required_commands,
         |accelerator, action| register_shortcut(app, accelerator, action),
     ) {
@@ -366,12 +415,13 @@ pub fn replace_keyboard_shortcuts_with_fixed_contents_requiring_commands(
 }
 
 pub fn validate_hotkey_settings(settings: &HotkeySettings) -> AppResult<()> {
-    validate_keyboard_shortcuts(settings, &[])
+    validate_keyboard_shortcuts(settings, &[], &[])
 }
 
 fn validate_keyboard_shortcuts(
     settings: &HotkeySettings,
     fixed_contents: &[FixedContent],
+    recent_history_hotkeys: &[RecentHistoryHotkey],
 ) -> AppResult<()> {
     let mut by_hotkey: BTreeMap<u32, String> = BTreeMap::new();
     for (command, accelerator, _) in keyboard_shortcut_entries(settings) {
@@ -382,6 +432,16 @@ fn validate_keyboard_shortcuts(
             &mut by_hotkey,
             &format!("fixed content {}", content.id),
             &content.hotkey,
+        )?;
+    }
+    for item in recent_history_hotkeys
+        .iter()
+        .filter(|item| item.enabled && !item.hotkey.trim().is_empty())
+    {
+        add_shortcut_assignment(
+            &mut by_hotkey,
+            &format!("recent history slot {}", item.slot),
+            &item.hotkey,
         )?;
     }
     Ok(())
@@ -501,6 +561,7 @@ enum HotkeyAction {
     Clear,
     QuickPaste(QuickPasteDirection),
     FixedContent(i64),
+    RecentHistorySlot(u8),
 }
 
 #[derive(Debug, Clone)]
@@ -532,6 +593,7 @@ fn keyboard_shortcut_entries(settings: &HotkeySettings) -> Vec<(&'static str, &s
 fn keyboard_shortcut_registrations<'a>(
     settings: &'a HotkeySettings,
     fixed_contents: &'a [FixedContent],
+    recent_history_hotkeys: &'a [RecentHistoryHotkey],
 ) -> Vec<KeyboardShortcutRegistration<'a>> {
     let mut registrations: Vec<_> = keyboard_shortcut_entries(settings)
         .into_iter()
@@ -552,6 +614,16 @@ fn keyboard_shortcut_registrations<'a>(
                 command: Cow::Owned(format!("fixed content {}", content.id)),
                 accelerator: content.hotkey.as_str(),
                 action: HotkeyAction::FixedContent(content.id),
+            }),
+    );
+    registrations.extend(
+        recent_history_hotkeys
+            .iter()
+            .filter(|item| item.enabled && !item.hotkey.trim().is_empty())
+            .map(|item| KeyboardShortcutRegistration {
+                command: Cow::Owned(format!("recent history slot {}", item.slot)),
+                accelerator: item.hotkey.as_str(),
+                action: HotkeyAction::RecentHistorySlot(item.slot),
             }),
     );
 
@@ -646,16 +718,27 @@ fn startup_hotkey_registration_failure(
     }
 }
 
-fn register_keyboard_shortcuts_with_fixed_contents(
+fn register_keyboard_shortcuts_with_recent_history(
     app: &AppHandle,
     settings: &HotkeySettings,
     fixed_contents: &[FixedContent],
+    recent_history_hotkeys: &[RecentHistoryHotkey],
 ) -> AppResult<()> {
     for (_, accelerator, action) in keyboard_shortcut_entries(settings) {
         register_shortcut(app, accelerator, action)?;
     }
     for content in fixed_contents.iter().filter(|content| content.enabled) {
         register_shortcut(app, &content.hotkey, HotkeyAction::FixedContent(content.id))?;
+    }
+    for item in recent_history_hotkeys
+        .iter()
+        .filter(|item| item.enabled && !item.hotkey.trim().is_empty())
+    {
+        register_shortcut(
+            app,
+            &item.hotkey,
+            HotkeyAction::RecentHistorySlot(item.slot),
+        )?;
     }
     Ok(())
 }
@@ -732,6 +815,16 @@ fn handle_hotkey_action(app: &AppHandle, action: HotkeyAction) {
                 );
             }
         }
+        HotkeyAction::RecentHistorySlot(slot) => {
+            if let Err(error) = paste_recent_history_slot(app, slot) {
+                tracing::warn!(
+                    target: "hotkeys",
+                    area = "hotkey",
+                    direction = "check global hotkey conflicts, Windows hook permissions, or input subsystem",
+                    "recent history slot paste failed: {error}"
+                );
+            }
+        }
     }
 }
 
@@ -762,6 +855,60 @@ fn paste_fixed_content(app: &AppHandle, id: i64) -> AppResult<()> {
 
     commands::emit_hud_notification(app, HudPayload::panel("固定内容", &content.title));
     Ok(())
+}
+
+fn paste_recent_history_slot(app: &AppHandle, slot: u8) -> AppResult<()> {
+    let state = app.state::<AppState>();
+    let outcome = paste_recent_history_slot_item(state.inner(), slot, |item| {
+        paste::write_clipboard_and_paste(app, item)
+    })?;
+
+    match outcome {
+        RecentHistorySlotResult::Pasted(result) => {
+            if result.success {
+                if let Some(item) = result.item.as_ref() {
+                    commands::emit_hud_notification(
+                        app,
+                        HudPayload::panel("最近历史", &item.preview),
+                    );
+                }
+                let _ = app.emit(
+                    events::HISTORY_REVISION,
+                    commands::HistoryRevisionPayload {
+                        revision: result.revision,
+                    },
+                );
+            } else {
+                tracing::warn!(
+                    target: "hotkeys",
+                    area = "hotkey",
+                    direction = "check clipboard write or foreground paste target",
+                    "recent history slot paste failed: {}",
+                    result.message
+                );
+            }
+        }
+        RecentHistorySlotResult::Empty => {
+            commands::emit_hud_notification(app, HudPayload::panel("最近历史", "最近历史不足"));
+        }
+    }
+    Ok(())
+}
+
+fn paste_recent_history_slot_item<F>(
+    state: &AppState,
+    slot: u8,
+    paste: F,
+) -> AppResult<RecentHistorySlotResult>
+where
+    F: FnOnce(&ClipboardItem) -> AppResult<()>,
+{
+    let offset = i64::from(slot.saturating_sub(1));
+    let Some(item) = state.repository().get_recent_history_by_offset(offset)? else {
+        return Ok(RecentHistorySlotResult::Empty);
+    };
+    commands::paste_item_impl(state, item.id, paste)
+        .map(|result| RecentHistorySlotResult::Pasted(Box::new(result)))
 }
 
 fn resolve_quick_history_item(
@@ -1465,6 +1612,69 @@ mod tests {
                 selected_item_id: Some(older.id),
             }
         );
+    }
+
+    #[test]
+    fn recent_history_slot_action_pastes_chronological_item() {
+        let state = AppState::new(repo());
+        state
+            .repository()
+            .insert_clipboard_item(text_input("old", "hash-slot-old"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let newest = state
+            .repository()
+            .insert_clipboard_item(text_input("new", "hash-slot-new"))
+            .unwrap();
+        let mut pasted_id = None;
+
+        let result = paste_recent_history_slot_item(&state, 1, |item| {
+            pasted_id = Some(item.id);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(pasted_id, Some(newest.id));
+        assert!(matches!(result, RecentHistorySlotResult::Pasted(_)));
+    }
+
+    #[test]
+    fn recent_history_slot_reports_empty_when_history_is_shorter_than_slot() {
+        let state = AppState::new(repo());
+        state
+            .repository()
+            .insert_clipboard_item(text_input("only", "hash-slot-only"))
+            .unwrap();
+
+        let result = paste_recent_history_slot_item(&state, 2, |_| Ok(())).unwrap();
+
+        assert!(matches!(result, RecentHistorySlotResult::Empty));
+    }
+
+    #[test]
+    fn recent_history_slot_shortcuts_are_registered_when_configured() {
+        let settings = crate::models::HotkeySettings::default();
+        let recent_history_hotkeys = vec![
+            crate::models::RecentHistoryHotkey {
+                slot: 1,
+                hotkey: "Ctrl+Alt+1".to_string(),
+                enabled: true,
+            },
+            crate::models::RecentHistoryHotkey {
+                slot: 10,
+                hotkey: "Ctrl+Alt+0".to_string(),
+                enabled: true,
+            },
+        ];
+
+        let entries = keyboard_shortcut_registrations(&settings, &[], &recent_history_hotkeys);
+
+        assert!(entries.iter().any(|entry| {
+            entry.command == "recent history slot 1" && entry.accelerator == "Ctrl+Alt+1"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.command == "recent history slot 10" && entry.accelerator == "Ctrl+Alt+0"
+        }));
     }
 
     #[test]

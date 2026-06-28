@@ -165,6 +165,20 @@ export interface FixedContentInput {
   enabled: boolean;
 }
 
+export interface RecentHistoryHotkey {
+  slot: number;
+  hotkey: string;
+  enabled: boolean;
+}
+
+export interface RecentHistoryHotkeyInput {
+  slot: number;
+  hotkey: string;
+  enabled: boolean;
+}
+
+export const RECENT_HISTORY_HOTKEY_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+
 export type SpecialPasteAction =
   | 'upper'
   | 'lower'
@@ -207,6 +221,10 @@ export interface ClipboardApi {
   createFixedContent: (input: FixedContentInput) => Promise<FixedContent>;
   updateFixedContent: (id: number, input: FixedContentInput) => Promise<FixedContent>;
   deleteFixedContent: (id: number) => Promise<void>;
+  getRecentHistoryHotkeys: () => Promise<RecentHistoryHotkey[]>;
+  updateRecentHistoryHotkey: (
+    input: RecentHistoryHotkeyInput
+  ) => Promise<RecentHistoryHotkey[]>;
   clearHistory: () => Promise<{ success: boolean; deleted: number; error?: string }>;
   exportHistory: (path: string) => Promise<HistoryExportResult>;
   importHistory: (path: string) => Promise<HistoryImportResult>;

@@ -3,11 +3,14 @@ import { Download, Monitor, Moon, SlidersHorizontal, Sun, Upload, X } from 'luci
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import {
   DEFAULT_HOTKEYS,
+  RECENT_HISTORY_HOTKEY_SLOTS,
   type AppSettings,
   type BlacklistApp,
   type FixedContent,
   type FixedContentInput,
-  type HotkeySettings
+  type HotkeySettings,
+  type RecentHistoryHotkey,
+  type RecentHistoryHotkeyInput
 } from '@shared/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -318,6 +321,9 @@ export function SettingsPanel({
   const [recordingFixedContentHotkey, setRecordingFixedContentHotkey] = useState(false);
   const [fixedContentRecordingPreview, setFixedContentRecordingPreview] = useState('');
   const [savingFixedContent, setSavingFixedContent] = useState(false);
+  const [recentHistoryHotkeys, setRecentHistoryHotkeys] = useState<RecentHistoryHotkey[]>([]);
+  const [recordingRecentHistorySlot, setRecordingRecentHistorySlot] = useState<number | null>(null);
+  const [recentHistoryRecordingPreview, setRecentHistoryRecordingPreview] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [clearState, setClearState] = useState<'idle' | 'clearing' | 'success' | 'error'>('idle');
   const [clearMessage, setClearMessage] = useState('');
@@ -328,11 +334,14 @@ export function SettingsPanel({
   const candidateComboRef = useRef('');
   const fixedContentPressedKeysRef = useRef<Set<string>>(new Set());
   const fixedContentCandidateComboRef = useRef('');
+  const recentHistoryPressedKeysRef = useRef<Set<string>>(new Set());
+  const recentHistoryCandidateComboRef = useRef('');
   const clearFeedbackTimerRef = useRef<number | null>(null);
   const settingsUpdateSeqRef = useRef<Partial<Record<keyof AppSettings, number>>>({});
   const hotkeyRecordSeqRef = useRef(0);
   const hotkeyAvailabilitySeqRef = useRef(0);
   const fixedContentHotkeyRecordSeqRef = useRef(0);
+  const recentHistoryRecordSeqRef = useRef(0);
   const openRef = useRef(open);
 
   function openPrefilledFixedContentForm(title: string, content: string) {
@@ -346,6 +355,11 @@ export function SettingsPanel({
     setFixedContentRecordingPreview('');
     fixedContentPressedKeysRef.current.clear();
     fixedContentCandidateComboRef.current = '';
+    recentHistoryRecordSeqRef.current += 1;
+    setRecordingRecentHistorySlot(null);
+    setRecentHistoryRecordingPreview('');
+    recentHistoryPressedKeysRef.current.clear();
+    recentHistoryCandidateComboRef.current = '';
     setEditingFixedContent(null);
     setFixedContentTitle(title);
     setFixedContentValue(content);
@@ -361,6 +375,7 @@ export function SettingsPanel({
       hotkeyRecordSeqRef.current += 1;
       hotkeyAvailabilitySeqRef.current += 1;
       fixedContentHotkeyRecordSeqRef.current += 1;
+      recentHistoryRecordSeqRef.current += 1;
       setEditingHotkey(null);
       setRecordingPreview('');
       setHotkeyAvailability({});
@@ -370,6 +385,11 @@ export function SettingsPanel({
       setFixedContentRecordingPreview('');
       fixedContentPressedKeysRef.current.clear();
       fixedContentCandidateComboRef.current = '';
+      setRecordingRecentHistorySlot(null);
+      setRecentHistoryRecordingPreview('');
+      setRecentHistoryHotkeys([]);
+      recentHistoryPressedKeysRef.current.clear();
+      recentHistoryCandidateComboRef.current = '';
       setShowFixedContentForm(false);
       setEditingFixedContent(null);
       setFixedContentTitle('');
@@ -492,6 +512,30 @@ export function SettingsPanel({
       .catch(() => {
         if (!cancelled) {
           setErrorMessage('固定快捷内容加载失败，请稍后重试。');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, activeTab]);
+
+  useEffect(() => {
+    if (!open || activeTab !== 'hotkeys') {
+      return;
+    }
+
+    let cancelled = false;
+    void clipboardApi
+      .getRecentHistoryHotkeys()
+      .then((items) => {
+        if (!cancelled) {
+          setRecentHistoryHotkeys(items);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setErrorMessage('最近历史快捷键加载失败，请稍后重试。');
         }
       });
 
@@ -685,6 +729,19 @@ export function SettingsPanel({
     setFixedContents(contents);
   };
 
+  const updateRecentHistoryHotkey = async (input: RecentHistoryHotkeyInput) => {
+    const updated = await clipboardApi.updateRecentHistoryHotkey(input);
+    setRecentHistoryHotkeys(updated);
+  };
+
+  const cancelRecentHistoryRecording = () => {
+    recentHistoryRecordSeqRef.current += 1;
+    setRecordingRecentHistorySlot(null);
+    setRecentHistoryRecordingPreview('');
+    recentHistoryPressedKeysRef.current.clear();
+    recentHistoryCandidateComboRef.current = '';
+  };
+
   const resetFixedContentForm = () => {
     fixedContentHotkeyRecordSeqRef.current += 1;
     setRecordingFixedContentHotkey(false);
@@ -729,11 +786,36 @@ export function SettingsPanel({
     setRecordingPreview('');
     pressedKeysRef.current.clear();
     candidateComboRef.current = '';
+    recentHistoryRecordSeqRef.current += 1;
+    setRecordingRecentHistorySlot(null);
+    setRecentHistoryRecordingPreview('');
+    recentHistoryPressedKeysRef.current.clear();
+    recentHistoryCandidateComboRef.current = '';
     fixedContentHotkeyRecordSeqRef.current += 1;
     setRecordingFixedContentHotkey(true);
     setFixedContentRecordingPreview('');
     fixedContentPressedKeysRef.current.clear();
     fixedContentCandidateComboRef.current = '';
+    setErrorMessage('');
+  };
+
+  const startRecentHistoryHotkeyRecording = (slot: number) => {
+    hotkeyRecordSeqRef.current += 1;
+    fixedContentHotkeyRecordSeqRef.current += 1;
+    recentHistoryRecordSeqRef.current += 1;
+    setEditingHotkey(null);
+    setRecordingPreview('');
+    pressedKeysRef.current.clear();
+    candidateComboRef.current = '';
+    setRecordingFixedContentHotkey(false);
+    setFixedContentRecordingPreview('');
+    fixedContentPressedKeysRef.current.clear();
+    fixedContentCandidateComboRef.current = '';
+    setRecordingRecentHistorySlot(slot);
+    setRecentHistoryRecordingPreview('');
+    recentHistoryPressedKeysRef.current.clear();
+    recentHistoryCandidateComboRef.current = '';
+    setHotkeyConflicts([]);
     setErrorMessage('');
   };
 
@@ -839,6 +921,11 @@ export function SettingsPanel({
     setFixedContentRecordingPreview('');
     fixedContentPressedKeysRef.current.clear();
     fixedContentCandidateComboRef.current = '';
+    recentHistoryRecordSeqRef.current += 1;
+    setRecordingRecentHistorySlot(null);
+    setRecentHistoryRecordingPreview('');
+    recentHistoryPressedKeysRef.current.clear();
+    recentHistoryCandidateComboRef.current = '';
     hotkeyRecordSeqRef.current += 1;
     setHotkeyConflicts([]);
     setEditingHotkey(key);
@@ -1038,6 +1125,115 @@ export function SettingsPanel({
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [open, recordingFixedContentHotkey]);
+
+  useEffect(() => {
+    if (!open || recordingRecentHistorySlot === null) {
+      return;
+    }
+
+    const updatePreviewFromPressed = () => {
+      const ordered = orderHotkeyTokens(Array.from(recentHistoryPressedKeysRef.current));
+      setRecentHistoryRecordingPreview(ordered.join('+'));
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === 'Escape') {
+        cancelRecentHistoryRecording();
+        return;
+      }
+
+      const token = normalizeRecordedKey(event.key);
+      if (!token) {
+        return;
+      }
+
+      if (!isModifierKey(token)) {
+        for (const key of Array.from(recentHistoryPressedKeysRef.current)) {
+          if (!isModifierKey(key)) {
+            recentHistoryPressedKeysRef.current.delete(key);
+          }
+        }
+      }
+
+      recentHistoryPressedKeysRef.current.add(token);
+      const candidate = orderHotkeyTokens(Array.from(recentHistoryPressedKeysRef.current)).join('+');
+      if (!isModifierKey(token)) {
+        recentHistoryCandidateComboRef.current = candidate;
+      }
+      setRecentHistoryRecordingPreview(candidate);
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const token = normalizeRecordedKey(event.key);
+      if (!token) {
+        return;
+      }
+
+      if (!isModifierKey(token)) {
+        const combo =
+          recentHistoryCandidateComboRef.current ||
+          orderHotkeyTokens(Array.from(recentHistoryPressedKeysRef.current)).join('+');
+        if (!combo) {
+          return;
+        }
+
+        const slot = recordingRecentHistorySlot;
+        const current = recentHistoryHotkeys.find((item) => item.slot === slot);
+        cancelRecentHistoryRecording();
+        const operationSeq = recentHistoryRecordSeqRef.current;
+        const isRecordingRequestActive = () =>
+          openRef.current && recentHistoryRecordSeqRef.current === operationSeq;
+
+        void (async () => {
+          try {
+            const available = await clipboardApi.checkHotkeyAvailable(combo);
+            if (!isRecordingRequestActive()) {
+              return;
+            }
+            if (available === false) {
+              const accepted = window.confirm(
+                `快捷键 ${formatHotkeyLabel(combo)} 可能被其他应用占用，仍然保存吗？`
+              );
+              if (!isRecordingRequestActive()) {
+                return;
+              }
+              if (!accepted) {
+                setHotkeyConflicts([`快捷键可能被其他应用占用: ${formatHotkeyLabel(combo)}`]);
+                return;
+              }
+            }
+
+            await updateRecentHistoryHotkey({
+              slot,
+              hotkey: combo,
+              enabled: current?.enabled ?? false
+            });
+          } catch {
+            if (isRecordingRequestActive()) {
+              setErrorMessage('最近历史快捷键保存失败，请稍后重试。');
+            }
+          }
+        })();
+        return;
+      }
+
+      recentHistoryPressedKeysRef.current.delete(token);
+      updatePreviewFromPressed();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [open, recordingRecentHistorySlot, recentHistoryHotkeys]);
 
   return (
     <Dialog
@@ -1398,6 +1594,67 @@ export function SettingsPanel({
               onRecord={startHotkeyRecording}
             />
 
+            <div className="space-y-2 rounded-[1.25rem] border border-slate-200 bg-white p-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">最近十个历史记录</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  为最近 1-10 条历史绑定快捷键，触发后直接粘贴对应位置的内容。
+                </p>
+              </div>
+              {RECENT_HISTORY_HOTKEY_SLOTS.map((slot) => {
+                const item = recentHistoryHotkeys.find((current) => current.slot === slot) ?? {
+                  slot,
+                  hotkey: '',
+                  enabled: false
+                };
+                return (
+                  <div
+                    key={slot}
+                    className="flex items-center justify-between gap-3 border-b border-slate-100 py-2 last:border-0"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold">
+                        {slot === 1 ? '位置 1（最新）' : `位置 ${slot}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        粘贴最近第 {slot} 条历史记录
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Switch
+                        aria-label={`启用位置 ${slot} 最近历史快捷键`}
+                        checked={item.enabled}
+                        disabled={!item.hotkey}
+                        onCheckedChange={(enabled) => {
+                          void updateRecentHistoryHotkey({ ...item, enabled });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="rounded-xl border border-teal-100 bg-teal-50 px-3 py-1.5 font-mono text-xs font-bold text-teal-900 hover:border-teal-300"
+                        onClick={() => startRecentHistoryHotkeyRecording(slot)}
+                      >
+                        {recordingRecentHistorySlot === slot ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-700" />
+                            <span>
+                              {recentHistoryRecordingPreview
+                                ? formatHotkeyLabel(recentHistoryRecordingPreview)
+                                : '请按组合键...'}
+                            </span>
+                          </span>
+                        ) : item.hotkey ? (
+                          formatHotkeyLabel(item.hotkey)
+                        ) : (
+                          '录制快捷键'
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
             <div className="space-y-3 rounded-[1.25rem] border border-slate-200 bg-white p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -1602,7 +1859,7 @@ export function SettingsPanel({
 
           <TabsContent value="about" className="settings-tab-panel min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 pt-2.5 text-sm">
             <div className="rounded-[1.25rem] border border-slate-200 bg-white p-4">
-              <p className="font-black text-slate-950">ClipVault v2.1.7</p>
+              <p className="font-black text-slate-950">ClipVault v2.1.8</p>
               <p className="mt-2 text-muted-foreground">当前缓存条目：{itemsCount}</p>
               <p className="mt-1 text-muted-foreground">数据默认保存在本地 Tauri 应用数据目录。</p>
             </div>

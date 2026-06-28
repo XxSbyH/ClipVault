@@ -13,6 +13,8 @@ import type {
   HudPayload,
   MonitoringStatus,
   QuickPasteCursorPayload,
+  RecentHistoryHotkey,
+  RecentHistoryHotkeyInput,
   SpecialPasteAction
 } from '@shared/types';
 
@@ -204,6 +206,12 @@ export const clipboardApi: ClipboardApi = {
   },
   async deleteFixedContent(id) {
     await invoke<void>('delete_fixed_content', { id });
+  },
+  getRecentHistoryHotkeys() {
+    return invoke<RecentHistoryHotkey[]>('get_recent_history_hotkeys');
+  },
+  updateRecentHistoryHotkey(input: RecentHistoryHotkeyInput) {
+    return invoke<RecentHistoryHotkey[]>('update_recent_history_hotkey', { input });
   },
   async clearHistory(): Promise<ClearHistoryResult> {
     try {
