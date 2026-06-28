@@ -5,14 +5,19 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
-    VK_CONTROL, VK_V,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_V,
 };
 
 use crate::{
     errors::{AppError, AppResult},
     models::{ClipboardContentType, ClipboardItem},
 };
+
+#[cfg(target_os = "windows")]
+const PASTE_MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_millis(900);
+#[cfg(target_os = "windows")]
+const PASTE_MODIFIER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 pub fn write_clipboard_and_paste(app: &AppHandle, item: &ClipboardItem) -> AppResult<()> {
     write_item_to_clipboard(app, item)?;
@@ -118,6 +123,17 @@ fn hide_main_window(app: &AppHandle) {
 #[cfg(target_os = "windows")]
 fn simulate_ctrl_v_after_delay(delay: Duration) -> AppResult<()> {
     std::thread::sleep(delay);
+    if wait_for_paste_modifiers_to_release() == ModifierReleaseStatus::TimedOut {
+        tracing::warn!(
+            target: "paste",
+            area = "paste",
+            direction = "release hotkey modifiers before simulating Ctrl+V",
+            "paste skipped because modifier keys are still held"
+        );
+        return Err(AppError::from(
+            "hotkey modifier keys were not released before paste",
+        ));
+    }
     send_ctrl_v()
 }
 
@@ -145,6 +161,65 @@ fn send_ctrl_v() -> AppResult<()> {
             "failed to simulate Ctrl+V: SendInput sent {sent} events"
         )))
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModifierReleaseStatus {
+    Released,
+    TimedOut,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn wait_for_modifier_release<F, S>(
+    timeout: Duration,
+    poll_interval: Duration,
+    mut modifier_is_down: F,
+    mut sleep: S,
+) -> ModifierReleaseStatus
+where
+    F: FnMut() -> bool,
+    S: FnMut(Duration),
+{
+    let poll_interval = if poll_interval.is_zero() {
+        Duration::from_millis(1)
+    } else {
+        poll_interval
+    };
+    let mut waited = Duration::ZERO;
+
+    while modifier_is_down() {
+        if waited >= timeout {
+            return ModifierReleaseStatus::TimedOut;
+        }
+        let delay = poll_interval.min(timeout.saturating_sub(waited));
+        sleep(delay);
+        waited += delay;
+    }
+
+    ModifierReleaseStatus::Released
+}
+
+#[cfg(target_os = "windows")]
+fn wait_for_paste_modifiers_to_release() -> ModifierReleaseStatus {
+    wait_for_modifier_release(
+        PASTE_MODIFIER_RELEASE_TIMEOUT,
+        PASTE_MODIFIER_RELEASE_POLL_INTERVAL,
+        paste_modifier_is_down,
+        std::thread::sleep,
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn paste_modifier_is_down() -> bool {
+    [VK_CONTROL.0, VK_MENU.0, VK_SHIFT.0, VK_LWIN.0, VK_RWIN.0]
+        .into_iter()
+        .any(key_is_down)
+}
+
+#[cfg(target_os = "windows")]
+fn key_is_down(vkey: u16) -> bool {
+    unsafe { GetAsyncKeyState(i32::from(vkey)) & 0x8000u16 as i16 != 0 }
 }
 
 #[cfg(target_os = "windows")]
@@ -200,5 +275,49 @@ mod tests {
             .extra
             .insert("hasRichFormats".to_string(), json!(true));
         assert!(super::should_try_rich_formats(&item));
+    }
+
+    #[test]
+    fn modifier_release_waits_until_modifiers_are_up() {
+        let mut samples = [true, true, false].into_iter();
+        let mut sleeps = Vec::new();
+
+        let status = super::wait_for_modifier_release(
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(20),
+            || samples.next().unwrap_or(false),
+            |duration| sleeps.push(duration),
+        );
+
+        assert_eq!(status, super::ModifierReleaseStatus::Released);
+        assert_eq!(
+            sleeps,
+            vec![
+                std::time::Duration::from_millis(20),
+                std::time::Duration::from_millis(20)
+            ]
+        );
+    }
+
+    #[test]
+    fn modifier_release_times_out_when_modifiers_stay_down() {
+        let mut sleeps = Vec::new();
+
+        let status = super::wait_for_modifier_release(
+            std::time::Duration::from_millis(45),
+            std::time::Duration::from_millis(20),
+            || true,
+            |duration| sleeps.push(duration),
+        );
+
+        assert_eq!(status, super::ModifierReleaseStatus::TimedOut);
+        assert_eq!(
+            sleeps,
+            vec![
+                std::time::Duration::from_millis(20),
+                std::time::Duration::from_millis(20),
+                std::time::Duration::from_millis(5)
+            ]
+        );
     }
 }

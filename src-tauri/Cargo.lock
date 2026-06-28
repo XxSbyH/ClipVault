@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "clipvault"
-version = "2.1.8"
+version = "2.1.9"
 dependencies = [
  "base64 0.22.1",
  "image",

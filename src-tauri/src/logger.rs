@@ -423,7 +423,7 @@ mod tests {
             "process_start",
             "process",
             "startup",
-            "version=2.1.8",
+            "version=2.1.9",
         )
         .unwrap();
         append_startup_line(
