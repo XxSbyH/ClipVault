@@ -23,6 +23,11 @@ use crate::{
 
 const CLIPBOARD_ITEM_SUMMARY_COLUMNS: &str = "id, content, content_type, content_hash, preview, metadata, file_path, NULL AS image_data, created_at, last_used_at, use_count, is_pinned, is_favorite";
 const CLIPBOARD_ITEM_SUMMARY_COLUMNS_QUALIFIED: &str = "clipboard_items.id, clipboard_items.content, clipboard_items.content_type, clipboard_items.content_hash, clipboard_items.preview, clipboard_items.metadata, clipboard_items.file_path, NULL AS image_data, clipboard_items.created_at, clipboard_items.last_used_at, clipboard_items.use_count, clipboard_items.is_pinned, clipboard_items.is_favorite";
+const HISTORY_ORDER: &str =
+    "is_pinned DESC, COALESCE(last_used_at, created_at) DESC, created_at DESC, id DESC";
+const HISTORY_ORDER_QUALIFIED: &str = "clipboard_items.is_pinned DESC, COALESCE(clipboard_items.last_used_at, clipboard_items.created_at) DESC, clipboard_items.created_at DESC, clipboard_items.id DESC";
+const RECENT_HISTORY_ORDER: &str =
+    "COALESCE(last_used_at, created_at) DESC, created_at DESC, id DESC";
 const MIN_MAX_ITEMS: u32 = 100;
 const MAX_MAX_ITEMS: u32 = 1_000_000;
 
@@ -136,7 +141,7 @@ impl Repository {
         let conn = self.conn()?;
         let sql = format!(
             "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
-             ORDER BY is_pinned DESC, created_at DESC, id DESC
+             ORDER BY {HISTORY_ORDER}
              LIMIT ?1"
         );
         query_items(&conn, &sql, params![limit])
@@ -146,7 +151,7 @@ impl Repository {
         let conn = self.conn()?;
         let sql = format!(
             "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
-             ORDER BY is_pinned DESC, created_at DESC, id DESC
+             ORDER BY {HISTORY_ORDER}
              LIMIT ?1 OFFSET ?2"
         );
         query_items(&conn, &sql, params![limit, offset])
@@ -156,22 +161,36 @@ impl Repository {
         let conn = self.conn()?;
         Ok(conn
             .query_row(
-                "SELECT * FROM clipboard_items
-                 ORDER BY is_pinned DESC, created_at DESC, id DESC
-                 LIMIT 1 OFFSET ?1",
+                &format!(
+                    "SELECT * FROM clipboard_items
+                     ORDER BY {HISTORY_ORDER}
+                     LIMIT 1 OFFSET ?1"
+                ),
                 params![offset],
                 map_clipboard_item,
             )
             .optional()?)
     }
 
+    pub fn get_recent_history(&self, limit: i64) -> AppResult<Vec<ClipboardItem>> {
+        let conn = self.conn()?;
+        let sql = format!(
+            "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
+             ORDER BY {RECENT_HISTORY_ORDER}
+             LIMIT ?1"
+        );
+        query_items(&conn, &sql, params![limit])
+    }
+
     pub fn get_recent_history_by_offset(&self, offset: i64) -> AppResult<Option<ClipboardItem>> {
         let conn = self.conn()?;
         Ok(conn
             .query_row(
-                "SELECT * FROM clipboard_items
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT 1 OFFSET ?1",
+                &format!(
+                    "SELECT * FROM clipboard_items
+                     ORDER BY {RECENT_HISTORY_ORDER}
+                     LIMIT 1 OFFSET ?1"
+                ),
                 params![offset],
                 map_clipboard_item,
             )
@@ -393,7 +412,7 @@ impl Repository {
             let sql = format!(
                 "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS} FROM clipboard_items
                  WHERE content LIKE ?1 OR preview LIKE ?1
-                 ORDER BY is_pinned DESC, created_at DESC, id DESC
+                 ORDER BY {HISTORY_ORDER}
                  LIMIT ?2"
             );
             query_items(&conn, &sql, params![like, limit])
@@ -402,7 +421,7 @@ impl Repository {
             "SELECT {CLIPBOARD_ITEM_SUMMARY_COLUMNS_QUALIFIED} FROM clipboard_items
              JOIN clipboard_fts ON clipboard_fts.rowid = clipboard_items.id
              WHERE clipboard_fts MATCH ?1
-             ORDER BY is_pinned DESC, created_at DESC, id DESC
+             ORDER BY {HISTORY_ORDER_QUALIFIED}
              LIMIT ?2"
         );
         let fts = query_items(&conn, &sql, params![fts_query, limit]);
@@ -1346,6 +1365,71 @@ mod tests {
 
         assert_eq!(history[0].id, older.id);
         assert_eq!(history[1].id, newer.id);
+    }
+
+    #[test]
+    fn get_history_sorts_pinned_first_then_recent_activity() {
+        let repo = repo();
+        let old = repo
+            .insert_clipboard_item(text_input("old", "hash-active-old"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let new = repo
+            .insert_clipboard_item(text_input("new", "hash-active-new"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let pinned_old = repo
+            .insert_clipboard_item(text_input("pinned old", "hash-active-pinned-old"))
+            .unwrap();
+        repo.toggle_pin(pinned_old.id).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let used_old = repo.increment_use_stats(old.id).unwrap();
+
+        let history = repo.get_history(10).unwrap();
+
+        assert_eq!(history[0].id, pinned_old.id);
+        assert_eq!(history[1].id, used_old.id);
+        assert_eq!(history[2].id, new.id);
+    }
+
+    #[test]
+    fn recent_history_lookup_uses_recent_activity_and_ignores_pinned_priority() {
+        let repo = repo();
+        let old = repo
+            .insert_clipboard_item(text_input("old", "hash-recent-active-old"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let pinned_new = repo
+            .insert_clipboard_item(text_input("new", "hash-recent-active-new"))
+            .unwrap();
+        repo.toggle_pin(pinned_new.id).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        repo.increment_use_stats(old.id).unwrap();
+
+        let first = repo.get_recent_history_by_offset(0).unwrap().unwrap();
+        let second = repo.get_recent_history_by_offset(1).unwrap().unwrap();
+
+        assert_eq!(first.id, old.id);
+        assert_eq!(second.id, pinned_new.id);
+    }
+
+    #[test]
+    fn search_items_sorts_results_by_recent_activity_inside_pinned_groups() {
+        let repo = repo();
+        let old = repo
+            .insert_clipboard_item(text_input("needle old", "hash-search-active-old"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let new = repo
+            .insert_clipboard_item(text_input("needle new", "hash-search-active-new"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        repo.increment_use_stats(old.id).unwrap();
+
+        let results = repo.search_items("needle", 10).unwrap();
+
+        assert_eq!(results[0].id, old.id);
+        assert_eq!(results[1].id, new.id);
     }
 
     #[test]
