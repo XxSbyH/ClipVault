@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Code2,
   Copy,
@@ -15,7 +15,6 @@ import { clipboardApi } from '@/lib/tauriApi';
 import { cn } from '@/lib/utils';
 
 const QUICK_SEARCH_LIMIT = 20;
-const VISIBLE_RESULT_LIMIT = 5;
 
 const TYPE_META: Record<ClipboardContentType, { label: string; icon: JSX.Element; className: string }> = {
   text: {
@@ -65,10 +64,10 @@ export function QuickSearchOverlay(): JSX.Element {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectedOptionRef = useRef<HTMLButtonElement | null>(null);
   const requestSeqRef = useRef(0);
 
-  const visibleItems = useMemo(() => items.slice(0, VISIBLE_RESULT_LIMIT), [items]);
-  const selectedItem = visibleItems[selectedIndex] ?? null;
+  const selectedItem = items[selectedIndex] ?? null;
 
   const loadItems = useCallback((nextQuery: string) => {
     const seq = requestSeqRef.current + 1;
@@ -142,18 +141,22 @@ export function QuickSearchOverlay(): JSX.Element {
   }, [resetSearch]);
 
   useEffect(() => {
+    selectedOptionRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [items, selectedIndex]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         hide();
         return;
       }
-      if (visibleItems.length === 0) {
+      if (items.length === 0) {
         return;
       }
       if (event.key === 'ArrowDown') {
         event.preventDefault();
-        setSelectedIndex((current) => Math.min(current + 1, visibleItems.length - 1));
+        setSelectedIndex((current) => Math.min(current + 1, items.length - 1));
         return;
       }
       if (event.key === 'ArrowUp') {
@@ -174,7 +177,7 @@ export function QuickSearchOverlay(): JSX.Element {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [copySelected, hide, pasteSelected, selectedItem, visibleItems.length]);
+  }, [copySelected, hide, items.length, pasteSelected, selectedItem]);
 
   return (
     <main
@@ -198,11 +201,11 @@ export function QuickSearchOverlay(): JSX.Element {
             className="h-9 min-w-0 flex-1 bg-transparent text-sm font-semibold text-slate-950 outline-none placeholder:text-slate-400"
           />
           <span className="rounded-full bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-500">
-            {loading ? '搜索中' : `${visibleItems.length} 项`}
+            {loading ? '搜索中' : `${items.length} 项`}
           </span>
         </div>
 
-        {visibleItems.length === 0 ? (
+        {items.length === 0 ? (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
             <div>
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700">
@@ -216,14 +219,15 @@ export function QuickSearchOverlay(): JSX.Element {
           <div
             role="listbox"
             aria-label="搜索结果"
-            className="min-h-0 flex-1 overflow-hidden p-2"
+            className="min-h-0 flex-1 overflow-y-auto p-2"
           >
-            {visibleItems.map((item, index) => {
+            {items.map((item, index) => {
               const meta = TYPE_META[item.contentType];
               const selected = index === selectedIndex;
               return (
                 <button
                   key={item.id}
+                  ref={selected ? selectedOptionRef : undefined}
                   type="button"
                   role="option"
                   aria-selected={selected}

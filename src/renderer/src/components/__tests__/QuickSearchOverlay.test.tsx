@@ -50,7 +50,14 @@ function makeItem(id: number, preview: string, overrides: Partial<ClipboardItem>
 }
 
 describe('QuickSearchOverlay', () => {
+  let originalScrollIntoView: typeof HTMLElement.prototype.scrollIntoView | undefined;
+
   beforeEach(() => {
+    originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn()
+    });
     getHistoryMock.mockResolvedValue([makeItem(1, 'alpha'), makeItem(2, 'bravo')]);
     searchItemsMock.mockResolvedValue([makeItem(3, 'needle result'), makeItem(4, 'needle backup')]);
     pasteItemMock.mockResolvedValue({ success: true });
@@ -62,6 +69,14 @@ describe('QuickSearchOverlay', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        value: originalScrollIntoView
+      });
+    } else {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
   });
 
   it('loads recent items, searches typed text, and selects with arrow keys', async () => {
@@ -138,5 +153,34 @@ describe('QuickSearchOverlay', () => {
     await screen.findByRole('option', { name: /alpha/ });
     expect(screen.getByTestId('quick-search-backdrop')).toHaveClass('items-start');
     expect(screen.getByTestId('quick-search-backdrop')).toHaveClass('justify-end');
+  });
+
+  it('renders every fetched result and displays the fetched count', async () => {
+    getHistoryMock.mockResolvedValue(Array.from({ length: 7 }, (_, index) => makeItem(index + 1, `item ${index + 1}`)));
+
+    render(<QuickSearchOverlay />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('option')).toHaveLength(7);
+    });
+    expect(screen.getByText('7 项')).toBeInTheDocument();
+  });
+
+  it('moves keyboard selection through fetched results and scrolls the selected row into view', async () => {
+    getHistoryMock.mockResolvedValue(Array.from({ length: 7 }, (_, index) => makeItem(index + 1, `item ${index + 1}`)));
+    const scrollIntoViewMock = HTMLElement.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+
+    render(<QuickSearchOverlay />);
+    await waitFor(() => {
+      expect(screen.getAllByRole('option')).toHaveLength(7);
+    });
+    scrollIntoViewMock.mockClear();
+
+    for (let index = 0; index < 6; index += 1) {
+      fireEvent.keyDown(window, { key: 'ArrowDown' });
+    }
+
+    expect(screen.getByRole('option', { name: /item 7/ })).toHaveAttribute('aria-selected', 'true');
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' });
   });
 });
