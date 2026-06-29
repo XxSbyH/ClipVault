@@ -68,6 +68,7 @@ describe('QuickSearchOverlay', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.clearAllMocks();
     if (originalScrollIntoView) {
       Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -95,6 +96,27 @@ describe('QuickSearchOverlay', () => {
     fireEvent.keyDown(window, { key: 'ArrowDown' });
 
     expect(screen.getByRole('option', { name: /needle backup/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('debounces typed search input before querying', async () => {
+    render(<QuickSearchOverlay />);
+
+    await screen.findByRole('option', { name: /alpha/ });
+    vi.useFakeTimers();
+
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'g' } });
+    fireEvent.change(input, { target: { value: 'gi' } });
+    fireEvent.change(input, { target: { value: 'git' } });
+
+    expect(searchItemsMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(119);
+    expect(searchItemsMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(searchItemsMock).toHaveBeenCalledTimes(1);
+    expect(searchItemsMock).toHaveBeenCalledWith('git', 20);
   });
 
   it('single-clicks only select and double-clicks paste then close', async () => {
@@ -164,6 +186,41 @@ describe('QuickSearchOverlay', () => {
       expect(screen.getAllByRole('option')).toHaveLength(7);
     });
     expect(screen.getByText('7 项')).toBeInTheDocument();
+  });
+
+  it('shows a no-history empty state when recent history is empty', async () => {
+    getHistoryMock.mockResolvedValue([]);
+
+    render(<QuickSearchOverlay />);
+
+    expect(await screen.findByText('暂无剪贴板历史')).toBeInTheDocument();
+    expect(screen.getByText('复制内容后会显示在这里，或按 Esc 关闭。')).toBeInTheDocument();
+  });
+
+  it('shows a no-match empty state when searching without matches', async () => {
+    searchItemsMock.mockResolvedValue([]);
+
+    render(<QuickSearchOverlay />);
+
+    await screen.findByRole('option', { name: /alpha/ });
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'github' } });
+
+    await waitFor(() => {
+      expect(searchItemsMock).toHaveBeenCalledWith('github', 20);
+    });
+    expect(await screen.findByText('没有匹配项')).toBeInTheDocument();
+    expect(screen.getByText('换个关键词试试，或按 Esc 关闭。')).toBeInTheDocument();
+  });
+
+  it('marks the count as more when fetched results reach the quick search limit', async () => {
+    getHistoryMock.mockResolvedValue(Array.from({ length: 20 }, (_, index) => makeItem(index + 1, `item ${index + 1}`)));
+
+    render(<QuickSearchOverlay />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('option')).toHaveLength(20);
+    });
+    expect(screen.getByText('20+ 项')).toBeInTheDocument();
   });
 
   it('moves keyboard selection through fetched results and scrolls the selected row into view', async () => {

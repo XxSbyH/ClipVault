@@ -15,6 +15,7 @@ import { clipboardApi } from '@/lib/tauriApi';
 import { cn } from '@/lib/utils';
 
 const QUICK_SEARCH_LIMIT = 20;
+const QUICK_SEARCH_DEBOUNCE_MS = 120;
 
 const TYPE_META: Record<ClipboardContentType, { label: string; icon: JSX.Element; className: string }> = {
   text: {
@@ -58,6 +59,10 @@ function itemText(item: ClipboardItem): string {
   return item.preview || item.content || item.filePath || '空内容';
 }
 
+function resultCountLabel(count: number): string {
+  return count >= QUICK_SEARCH_LIMIT ? `${QUICK_SEARCH_LIMIT}+ 项` : `${count} 项`;
+}
+
 export function QuickSearchOverlay(): JSX.Element {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<ClipboardItem[]>([]);
@@ -65,9 +70,15 @@ export function QuickSearchOverlay(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedOptionRef = useRef<HTMLButtonElement | null>(null);
+  const initialLoadRef = useRef(true);
   const requestSeqRef = useRef(0);
 
   const selectedItem = items[selectedIndex] ?? null;
+  const hasQuery = query.trim().length > 0;
+  const emptyTitle = hasQuery ? '没有匹配项' : '暂无剪贴板历史';
+  const emptyDescription = hasQuery
+    ? '换个关键词试试，或按 Esc 关闭。'
+    : '复制内容后会显示在这里，或按 Esc 关闭。';
 
   const loadItems = useCallback((nextQuery: string) => {
     const seq = requestSeqRef.current + 1;
@@ -129,7 +140,14 @@ export function QuickSearchOverlay(): JSX.Element {
   );
 
   useEffect(() => {
-    loadItems(query);
+    if (initialLoadRef.current || !query.trim()) {
+      initialLoadRef.current = false;
+      loadItems(query);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => loadItems(query), QUICK_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeout);
   }, [loadItems, query]);
 
   useEffect(() => {
@@ -201,7 +219,7 @@ export function QuickSearchOverlay(): JSX.Element {
             className="h-9 min-w-0 flex-1 bg-transparent text-sm font-semibold text-slate-950 outline-none placeholder:text-slate-400"
           />
           <span className="rounded-full bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-500">
-            {loading ? '搜索中' : `${items.length} 项`}
+            {loading ? '搜索中' : resultCountLabel(items.length)}
           </span>
         </div>
 
@@ -211,8 +229,8 @@ export function QuickSearchOverlay(): JSX.Element {
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700">
                 <Search className="h-5 w-5" />
               </div>
-              <p className="mt-3 text-sm font-black text-slate-900">没有匹配项</p>
-              <p className="mt-1 text-xs leading-5 text-slate-500">换个关键词试试，或按 Esc 关闭。</p>
+              <p className="mt-3 text-sm font-black text-slate-900">{emptyTitle}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">{emptyDescription}</p>
             </div>
           </div>
         ) : (
