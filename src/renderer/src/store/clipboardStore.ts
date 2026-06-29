@@ -16,12 +16,24 @@ interface ClipboardState {
   setSettings: (settings: AppSettings) => void;
 }
 
+function activeAt(item: ClipboardItem): number {
+  return item.lastUsedAt ?? item.createdAt;
+}
+
 function sortItems(items: ClipboardItem[]): ClipboardItem[] {
   return [...items].sort((a, b) => {
     if (a.isPinned !== b.isPinned) {
       return Number(b.isPinned) - Number(a.isPinned);
     }
-    return b.createdAt - a.createdAt;
+    const activeDiff = activeAt(b) - activeAt(a);
+    if (activeDiff !== 0) {
+      return activeDiff;
+    }
+    const createdDiff = b.createdAt - a.createdAt;
+    if (createdDiff !== 0) {
+      return createdDiff;
+    }
+    return b.id - a.id;
   });
 }
 

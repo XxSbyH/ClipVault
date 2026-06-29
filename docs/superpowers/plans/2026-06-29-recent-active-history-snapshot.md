@@ -461,7 +461,7 @@ describe('clipboardStore sorting', () => {
 Run:
 
 ```powershell
-pnpm vitest run src/renderer/src/store/__tests__/clipboardStore.test.ts
+pnpm test -- src/renderer/src/store/__tests__/clipboardStore.test.ts
 ```
 
 Expected: tests fail because current store sorting only uses `createdAt`.
@@ -498,7 +498,7 @@ function sortItems(items: ClipboardItem[]): ClipboardItem[] {
 Run:
 
 ```powershell
-pnpm vitest run src/renderer/src/store/__tests__/clipboardStore.test.ts
+pnpm test -- src/renderer/src/store/__tests__/clipboardStore.test.ts
 ```
 
 Expected: store tests pass.
@@ -508,7 +508,7 @@ Expected: store tests pass.
 Run:
 
 ```powershell
-pnpm vitest run src/renderer/src/components/__tests__/ClipboardList.test.tsx
+pnpm test -- src/renderer/src/components/__tests__/ClipboardList.test.tsx
 ```
 
 Expected: ClipboardList tests pass. If a test expected the old selected item and the fixture now intentionally uses `lastUsedAt`, update the fixture or assertion to match recent-active behavior.
