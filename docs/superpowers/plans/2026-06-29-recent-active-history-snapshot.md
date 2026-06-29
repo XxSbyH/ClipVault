@@ -116,7 +116,7 @@ $env:RUSTUP_HOME='D:\rj\rustup'
 $env:CARGO_HOME='D:\rj\cargo'
 $env:RUSTUP_TOOLCHAIN='stable-x86_64-pc-windows-msvc'
 $env:PATH='D:\rj\cargo\bin;' + $env:PATH
-cargo test --manifest-path src-tauri\Cargo.toml database::repository::tests::get_history_sorts_pinned_first_then_recent_activity database::repository::tests::recent_history_lookup_uses_recent_activity_and_ignores_pinned_priority database::repository::tests::search_items_sorts_results_by_recent_activity_inside_pinned_groups -- --nocapture
+cargo test --manifest-path src-tauri\Cargo.toml database::repository::tests:: -- --nocapture
 ```
 
 Expected: at least one test fails because current queries order by `created_at` only.
@@ -269,7 +269,7 @@ $env:RUSTUP_HOME='D:\rj\rustup'
 $env:CARGO_HOME='D:\rj\cargo'
 $env:RUSTUP_TOOLCHAIN='stable-x86_64-pc-windows-msvc'
 $env:PATH='D:\rj\cargo\bin;' + $env:PATH
-cargo test --manifest-path src-tauri\Cargo.toml hotkeys::tests::active_session_ignores_new_items_until_idle_timeout hotkeys::tests::recent_history_slot_reuses_snapshot_before_idle_timeout hotkeys::tests::recent_history_slot_action_uses_recent_activity_snapshot -- --nocapture
+cargo test --manifest-path src-tauri\Cargo.toml hotkeys::tests:: -- --nocapture
 ```
 
 Expected: tests fail because slot resolution does not use a cursor snapshot yet, and active sessions currently merge new IDs.
