@@ -204,7 +204,9 @@ fn active_session_ignores_new_items_until_idle_timeout() {
         cursor.resolve_at(
             QuickPasteDirection::Newer,
             &[11, 10, 9, 8],
-            now + QUICK_PASTE_CURSOR_IDLE_RESET + Duration::from_millis(1)
+            now + Duration::from_millis(500)
+                + QUICK_PASTE_CURSOR_IDLE_RESET
+                + Duration::from_millis(1)
         ),
         QuickPasteCursorResolution::Boundary(QuickPasteBoundary::Newest)
     );
@@ -227,7 +229,9 @@ fn recent_history_slot_reuses_snapshot_before_idle_timeout() {
         cursor.resolve_slot_at(
             2,
             &[9, 10, 8],
-            now + QUICK_PASTE_CURSOR_IDLE_RESET + Duration::from_millis(1)
+            now + Duration::from_millis(500)
+                + QUICK_PASTE_CURSOR_IDLE_RESET
+                + Duration::from_millis(1)
         ),
         QuickPasteCursorResolution::Item(10)
     );

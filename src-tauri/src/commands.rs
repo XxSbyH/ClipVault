@@ -237,7 +237,7 @@ pub fn set_quick_paste_cursor_impl(
     let total = state.repository().count_items()?;
     let history_ids = state
         .repository()
-        .get_history(total)?
+        .get_recent_history(total)?
         .into_iter()
         .map(|item| item.id)
         .collect::<Vec<_>>();
