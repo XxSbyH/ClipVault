@@ -246,7 +246,7 @@ pub fn run() {
                 }
             };
 
-            if settings.launch_on_startup {
+            if settings.launch_on_startup && autostart::should_sync_launch_on_startup() {
                 logger::startup_info(
                     "autostart_sync",
                     "autostart",
@@ -267,6 +267,13 @@ pub fn run() {
                     "autostart",
                     "Windows autostart entry synchronized",
                     "enabled=true",
+                );
+            } else if settings.launch_on_startup {
+                logger::startup_info(
+                    "autostart_sync",
+                    "autostart",
+                    "debug Windows build skips autostart registry sync to avoid registering target debug exe",
+                    "enabled=true skipped=true",
                 );
             } else {
                 logger::startup_info(

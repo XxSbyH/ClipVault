@@ -18,7 +18,18 @@ pub fn autostart_command_for_exe_path(exe_path: &str) -> String {
     format!("\"{exe_path}\" {AUTOSTART_ARG}")
 }
 
+pub fn should_sync_launch_on_startup_for_build(is_windows: bool, is_debug: bool) -> bool {
+    !(is_windows && is_debug)
+}
+
+pub fn should_sync_launch_on_startup() -> bool {
+    should_sync_launch_on_startup_for_build(cfg!(target_os = "windows"), cfg!(debug_assertions))
+}
+
 pub fn sync_launch_on_startup(enabled: bool) -> Result<(), String> {
+    if !should_sync_launch_on_startup() {
+        return Ok(());
+    }
     platform::sync_launch_on_startup(enabled)
 }
 
@@ -189,5 +200,12 @@ mod tests {
     #[test]
     fn normal_launch_shows_main_window() {
         assert!(should_show_main_window_for_args(["ClipVault.exe"]));
+    }
+
+    #[test]
+    fn windows_debug_build_does_not_sync_launch_on_startup() {
+        assert!(!should_sync_launch_on_startup_for_build(true, true));
+        assert!(should_sync_launch_on_startup_for_build(true, false));
+        assert!(should_sync_launch_on_startup_for_build(false, true));
     }
 }
